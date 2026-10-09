@@ -32,9 +32,9 @@ describe('save', () => {
   it('persists through storage and survives storage errors', () => {
     const mem = new Map<string, string>()
     const storage = { getItem: (k: string) => mem.get(k) ?? null, setItem: (k: string, v: string) => void mem.set(k, v) }
-    new SaveStore(storage).update({ musicVolume: 0.3, locale: 'zh-CN' })
+    new SaveStore(storage).update({ musicVolume: 0.3, locale: 'en' })
     expect(JSON.parse(mem.get(SAVE_KEY)!).musicVolume).toBe(0.3)
-    expect(new SaveStore(storage).data.locale).toBe('zh-CN')
+    expect(new SaveStore(storage).data.locale).toBe('en')
     const broken = { getItem: () => { throw new Error('denied') }, setItem: () => { throw new Error('quota') } }
     const store = new SaveStore(broken)
     expect(() => store.update({ muted: true })).not.toThrow()

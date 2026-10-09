@@ -1,65 +1,86 @@
-# game-3d starter (three.js + Rapier)
+# MagSwoop: Magpie Sky Patrol
 
-A complete, small 3D game — **Sky Cores**: run, jump and dash across floating islands to collect
-every energy core before the clock runs out, avoiding patrol drones. It exists to be *changed*:
-the engine layer is fixed scaffolding, the game layer is the part you rewrite.
+A 3D arcade browser game built with three.js. It is swooping season in an Australian suburban park.
+You control a flock of three magpies and defend the nest by diving at runners and cyclists. You score
+points for scaring them off or hitting them, keep combos going, and switch birds before the one you are
+flying gets too tired.
 
 ```bash
 pnpm install
-pnpm dev      # http://localhost:5173
-pnpm build    # typecheck + production build + bundle budget
-pnpm test     # unit tests (rules, save, i18n, level)
-pnpm smoke    # after build: headless browser playthrough + screenshots in shots/
+pnpm dev      # local dev server
+pnpm build    # production build + sharing metadata + bundle budget
+pnpm test     # unit tests (rules, flight, park layout, songs, save, i18n, tuning)
+pnpm smoke    # after build: headless playthrough (fly, swoop, carol, switch, menus) + shots/
 ```
+
+## How to play
+
+| Action | Keyboard / mouse | Gamepad | Touch |
+| --- | --- | --- | --- |
+| Steer / climb / dive | WASD or arrows, or the mouse (click to capture) | Left stick | Left drag pad |
+| Flap | Space | A | (automatic) |
+| Boost | Shift | RB / LT | BOOST |
+| Swoop at the locked target | F or left click | X / RT | SWOOP |
+| Carol (scares score x1.5 for a few seconds) | E | Y | CAROL |
+| Switch magpie | Q, or 1 / 2 / 3 | LB | SWITCH |
+| Pause | Esc or P | Start | Pause button |
+
+- **Scare** a person by swooping close past them. **Hit** them for more points. Chained swoops build a combo.
+- **Intruders** walk into the red ring around the nest tree. If they get through, you lose one of the three
+  eggs. Chase them off for a "Nest defended" bonus.
+- Each magpie has **stamina**. Resting birds perch, recover, and carol on their own.
+- The season lasts 2:30. Every egg you still have at the end adds a bonus. Your best scores are saved locally.
+
+## The flock
+
+| Magpie | Plumage | Handling | Voice |
+| --- | --- | --- | --- |
+| **Pied** | White-backed | Balanced all-rounder | Clear, sweet carol |
+| **Scruffy** | Mottled grey-brown juvenile | Nimble with the most stamina | Higher, scratchy warble |
+| **Blackback** | Mostly black | Fastest dives, biggest hits | Deep, rich song |
+
+## Audio (all synthesised live with Web Audio, no recordings)
+
+- **Magpie carols**: multi-phrase, two-voice warbling songs with per-bird pitch, timbre and tempo.
+  The call button plays them, and resting birds also sing them from their perches.
+- **Alarm calls and chortles** play when a magpie swoops, scores a hit, or spots an intruder.
+- **Swoop whoosh** is filtered noise that follows the bird's dive speed. It is layered with wind rush,
+  wing flaps and bill clacks.
+- **People and park sounds**: bike bells, yelps and ambient park birdsong.
+- There are three volume buses: **Magpie calls**, **Effects** and **Ambience**. You can also mute
+  everything in Settings.
 
 ## Layout
 
-| Path | Role | Change it? |
-| --- | --- | --- |
-| `src/engine/loop.ts` | Fixed 60 Hz simulation + interpolated rendering | Rarely |
-| `src/engine/input.ts` | Keyboard/mouse, gamepad, touch → one action state | Add actions here |
-| `src/engine/physics.ts` | Rapier world, collider helpers, render interpolation | Rarely |
-| `src/engine/renderer.ts` | WebGL renderer, quality presets, bloom | Rarely |
-| `src/engine/audio.ts` | Music/SFX buses, synthesized SFX, `load()` for files | Add sounds |
-| `src/engine/save.ts` | Versioned localStorage save + leaderboard | Add fields + parsing |
-| `src/engine/i18n.ts` | en / zh-CN, browser detection, saved choice wins | Rarely |
-| `src/engine/assets.ts` | Cached GLTF/texture loading with progress | Use it for models |
-| `src/game/config.ts` | Source defaults and active gameplay configuration | Yes |
-| `src/game/tuning.ts` | Tweak catalog, atomic validation and activation boundaries | Yes |
-| `src/game/rules.ts` | Pure score/lives/clock/win rules (unit tested) | Yes |
-| `src/game/world.ts` | Level layout, sky, lights, islands, stones, lifts | Yes |
-| `src/game/player.ts` | Character controller + game feel + procedural model | Yes |
-| `src/game/*.ts` | Camera, cores, drones, particles, scene orchestration | Yes |
-| `src/ui/`, `src/styles/main.css` | HTML/CSS title, HUD, pause, settings, results | Yes |
-| `src/i18n/*.json` | All player-facing text (both files, same keys) | Yes |
+| Path | Role |
+| --- | --- |
+| `src/game/park.ts` | Pure park layout: bike loop, gravel paths, trees, furniture, nest and perches |
+| `src/game/config.ts` / `tuning.ts` | Flight, swoop, carol, crowd, scoring and camera tuning |
+| `src/game/rules.ts` | Pure scoring, combos, carol buff, eggs, timer and stars (unit tested) |
+| `src/game/magpies.ts` | Three plumage variants and the procedural low-poly magpie model |
+| `src/game/bird.ts` | Flight controller: flapping, boost, homing swoops, stamina, AI perching |
+| `src/game/people.ts` | Procedural runners and cyclists with path following, startle and flee |
+| `src/game/world.ts` | Procedural suburban park scene: sky, gum trees, houses, fence and nest tree |
+| `src/game/game.ts` | Orchestrator: flock switching, targeting, scoring, nest defence and audio cues |
+| `src/engine/audio.ts` | Magpie song synthesiser and sound-effect engine |
+| `src/ui/ui.ts`, `src/ui/touch.ts`, `src/styles/main.css` | DOM menus, HUD, results, high scores and touch controls |
+| `src/i18n/en.json` | All player-facing text |
+| `game-sharing.json`, `assets/share/` | Share card metadata, cover art and favicon |
 
 ## Rules for changes
 
-- **Simulation in `step()`, visuals in `render()`/`animate()`.** Gameplay state only changes in
-  fixed steps; read presses there with `input.consume(action)`, never `pressed()`.
-- **Rules stay pure.** Scoring, win/lose and progression go in `rules.ts` with tests; scene code
-  reports events and reads state.
-- **Every visible string is an i18n key** in both `en.json` and `zh-CN.json` (a test enforces
-  matching keys and placeholders). English and Chinese use the bundled Manus CC0 fonts in `public/fonts/`;
-  if you add new Chinese text, check it renders (missing glyphs fall back to system fonts).
-- **UI is HTML/CSS**, not canvas. Keep the game look: display font, outlined text, hard offset
-  shadows, skewed buttons, notched panels. Menus must stay keyboard/gamepad navigable
-  (`data-nav` on focusable controls).
-- **Colliders come from the helpers** in `physics.ts` with the same sizes as the meshes.
-- Keep `npm run build` within budget (`scripts/check-size.mjs`) and `npm run smoke` green.
+- **Simulation in `step()`, visuals in `render()`/`animate()`.** Read presses in fixed steps with
+  `input.consume(action)`.
+- **Rules stay pure.** Scoring and win/lose logic live in `rules.ts` with tests.
+- **Every visible string is an i18n key** in `src/i18n/en.json`. A test checks that every key used in code exists.
+- Keep `pnpm build` within budget (`scripts/check-size.mjs`) and `pnpm smoke` green.
 
-## Controls
-
-Keyboard/mouse: WASD move, mouse look (click to capture), Space jump (hold = higher), Shift
-sprint, F or left click dash, Esc pause. Gamepad: left stick, right stick, A jump, X/RB dash,
-LB sprint, Start pause. Touch: left-side stick, right-side drag to look, JUMP / DASH buttons.
+Online features (accounts, online leaderboards and multiplayer) are not part of this version. The game runs without a server.
 
 ## Credits
 
-Fonts: ManusCC0 (regular, medium, bold) and ManusCC0 Sans CJK SC — CC0 1.0.
-The bundled Chinese font preserves its 6,547-codepoint repertoire; no font download is required.
-See `public/fonts/ManusCC0-LICENSE.txt`.
-Libraries: three.js (MIT), Rapier (Apache-2.0).
+Fonts: ManusCC0 (regular, medium, bold), CC0 1.0. See `public/fonts/ManusCC0-LICENSE.txt`.
+Library: three.js (MIT). All 3D models are procedural, and all sounds are synthesised at runtime.
 
 ## Preview Tweak
 
@@ -72,8 +93,8 @@ Keep the Vite plugin and `scripts/__manus__/` helpers intact; production builds 
 the browser adapter and never inject the bridge.
 
 Apply changes preview state only. `LIVE` parameters are read in the next game update;
-`NEXT_ACTION` parameters activate at the relevant jump/dash start; `NEXT_RUN` parameters
-activate in `Game.start`. Model/collider size and gravity are not exposed by this version.
+`NEXT_ACTION` parameters activate at the next swoop start; `NEXT_RUN` parameters
+activate in `Game.start`. Model sizes and the park layout are not exposed by this version.
 Do not mutate the source defaults or persist Apply to localStorage. Save with Manus
 checks the snapshot against the current catalog and edits `DEFAULT_CONFIG`, then uses
 the normal Three.js Web build/checkpoint workflow. Keep existing gameplay parameter

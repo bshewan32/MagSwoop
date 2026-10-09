@@ -1,66 +1,79 @@
 import * as THREE from 'three'
-import { RAPIER, type Physics } from '../engine/physics'
 import { CONFIG } from './config'
+import { forwardOf } from './bird'
 
 const C = CONFIG.camera
 
-/**
- * Orbit follow camera. Yaw/pitch come from mouse, right stick or touch drag; the boom shortens
- * when level geometry is between the player and the camera so the player never disappears.
- */
-export class FollowCamera {
-  readonly camera = new THREE.PerspectiveCamera(C.fov, 1, 0.1, 500)
-  yaw = 0
-  pitch = 0.42
-  private distance: number = C.distance
-  private readonly focus = new THREE.Vector3()
-  private shake = 0
+export type ChaseTarget = { position: THREE.Vector3; yaw: number; pitch: number; speed: number; swooping: boolean }
 
-  constructor(private readonly physics: Physics, private readonly exclude: RAPIER.Collider) {}
+/**
+ * Third-person chase camera behind the controlled magpie. Position eases toward a point behind
+ * and above the bird; the field of view widens with speed and during swoops; switching birds is
+ * a smooth glide because the camera simply starts chasing the new one.
+ */
+export class ChaseCamera {
+  readonly camera = new THREE.PerspectiveCamera(C.fov, 1, 0.1, 700)
+  private readonly look = new THREE.Vector3()
+  private fov: number = C.fov
+  private shake = 0
+  private readonly tmp = new THREE.Vector3()
+  private readonly want = new THREE.Vector3()
 
   addShake(amount: number): void {
     this.shake = Math.min(1, this.shake + amount)
   }
 
-  /** Snap without smoothing (spawn, respawn). */
-  reset(target: THREE.Vector3, yaw = this.yaw): void {
-    this.yaw = yaw
-    this.focus.copy(target)
-    this.distance = C.distance
-    this.update(target, { x: 0, y: 0 }, 1, true)
+  private desired(t: ChaseTarget, out: THREE.Vector3): THREE.Vector3 {
+    const back = forwardOf(t.yaw, t.pitch * 0.55, this.tmp)
+    const dist = C.distance * (t.swooping ? 0.85 : 1)
+    out.copy(t.position).addScaledVector(back, -dist)
+    out.y += C.height
+    out.y = Math.max(out.y, 0.7)
+    return out
   }
 
-  update(target: THREE.Vector3, look: { x: number; y: number }, frameSeconds: number, snap = false, reducedMotion = false): void {
-    if (this.camera.fov !== C.fov) {
-      this.camera.fov = C.fov
+  /** Snap behind the target (run start). */
+  reset(t: ChaseTarget): void {
+    this.desired(t, this.camera.position)
+    this.look.copy(t.position).addScaledVector(forwardOf(t.yaw, t.pitch, this.tmp), 3)
+    this.camera.lookAt(this.look)
+  }
+
+  follow(t: ChaseTarget, frameSeconds: number, reducedMotion: boolean): void {
+    const k = 1 - Math.exp(-C.follow * frameSeconds)
+    this.desired(t, this.want)
+    this.camera.position.lerp(this.want, k)
+    this.camera.position.y = Math.max(this.camera.position.y, 0.6)
+    this.tmp.copy(t.position).addScaledVector(forwardOf(t.yaw, t.pitch, this.want), 3)
+    this.tmp.y += 0.35
+    this.look.lerp(this.tmp, Math.min(1, k * 1.8))
+    this.camera.lookAt(this.look)
+    const kick = Math.max(0, t.speed - CONFIG.flight.cruiseSpeed) * 0.7 + (t.swooping ? 8 : 0)
+    this.setFov(C.fov + (reducedMotion ? kick * 0.3 : kick), frameSeconds)
+    this.applyShake(frameSeconds, reducedMotion)
+  }
+
+  /** Slow orbit around the nest tree for the title screen. */
+  orbit(center: THREE.Vector3, time: number, frameSeconds: number): void {
+    const a = time * 0.07
+    this.camera.position.set(center.x + Math.cos(a) * 24, 11 + Math.sin(time * 0.15) * 2, center.z + Math.sin(a) * 24)
+    this.look.set(center.x, 7.5, center.z)
+    this.camera.lookAt(this.look)
+    this.setFov(C.fov - 8, frameSeconds)
+  }
+
+  private setFov(target: number, frameSeconds: number): void {
+    this.fov += (target - this.fov) * (1 - Math.exp(-4 * frameSeconds))
+    if (Math.abs(this.camera.fov - this.fov) > 0.01) {
+      this.camera.fov = this.fov
       this.camera.updateProjectionMatrix()
     }
-    this.yaw -= look.x
-    this.pitch = THREE.MathUtils.clamp(this.pitch + look.y, C.minPitch, C.maxPitch)
+  }
 
-    const aim = target.clone().add(new THREE.Vector3(0, C.height * 0.45, 0))
-    if (snap) this.focus.copy(aim)
-    else {
-      // Follow horizontally a bit tighter than vertically so jumps don't bounce the whole view.
-      const k = 1 - Math.exp(-C.follow * frameSeconds)
-      const kv = 1 - Math.exp(-C.follow * 0.55 * frameSeconds)
-      this.focus.x += (aim.x - this.focus.x) * k
-      this.focus.z += (aim.z - this.focus.z) * k
-      this.focus.y += (aim.y - this.focus.y) * kv
-    }
-
-    const dir = new THREE.Vector3(Math.sin(this.yaw) * Math.cos(this.pitch), Math.sin(this.pitch), Math.cos(this.yaw) * Math.cos(this.pitch))
-    let wanted: number = C.distance
-    const hit = this.physics.world.castRay(new RAPIER.Ray(this.focus, dir), C.distance, true, undefined, undefined, this.exclude)
-    if (hit) wanted = Math.max(1.2, hit.timeOfImpact - 0.35)
-    // Pull in instantly when blocked, ease back out when clear.
-    this.distance = wanted < this.distance || snap ? wanted : THREE.MathUtils.damp(this.distance, wanted, 4, frameSeconds)
-
-    this.camera.position.copy(this.focus).addScaledVector(dir, this.distance)
-    this.camera.lookAt(this.focus)
+  private applyShake(frameSeconds: number, reducedMotion: boolean): void {
     if (this.shake > 0 && !reducedMotion) {
-      const s = this.shake * this.shake * 0.35
-      this.camera.position.add(new THREE.Vector3((Math.random() - 0.5) * s, (Math.random() - 0.5) * s, (Math.random() - 0.5) * s))
+      const s = this.shake * this.shake * 0.3
+      this.camera.position.add(this.tmp.set((Math.random() - 0.5) * s, (Math.random() - 0.5) * s, (Math.random() - 0.5) * s))
     }
     this.shake = Math.max(0, this.shake - frameSeconds * 2.5)
   }

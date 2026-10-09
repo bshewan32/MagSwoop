@@ -1,48 +1,45 @@
 import { CONFIG } from './config'
+import type { PersonKind } from './park'
 
 /**
- * Pure run rules: score, combo, lives, clock, win/lose. No three.js, no Rapier, no DOM — the
+ * Pure run rules: score, combo, carol buff, eggs, clock, win/lose. No three.js, no DOM — the
  * scene reports events and reads the resulting state, and unit tests cover every rule here.
  */
 export type RunPhase = 'playing' | 'won' | 'lost'
-export type LoseReason = 'time' | 'lives'
+export type Outcome = 'scare' | 'hit'
 
 export type RunState = {
+  /** Gameplay tuning was changed during this run. */
   unranked: boolean
   phase: RunPhase
-  loseReason?: LoseReason
   score: number
-  lives: number
+  eggs: number
   timeLeft: number
   elapsed: number
-  collected: number
-  total: number
   combo: number
   comboTimer: number
-  invulnerable: number
-  /** End-of-run bonuses (already included in `score`), kept separate for the results screen. */
-  timeBonus: number
-  lifeBonus: number
+  bestCombo: number
+  scares: number
+  hits: number
+  runners: number
+  cyclists: number
+  defended: number
+  /** Seconds left on the territorial carol buff, and until the next carol is allowed. */
+  carolTime: number
+  carolCooldown: number
+  /** End-of-season bonus for eggs kept (already included in `score`). */
+  eggBonus: number
 }
 
-export function createRun(totalCores: number, rules = CONFIG): RunState {
+export function createRun(): RunState {
   return {
-    unranked: false,
-    phase: 'playing',
-    score: 0,
-    lives: rules.run.lives,
-    timeLeft: rules.run.seconds,
-    elapsed: 0,
-    collected: 0,
-    total: totalCores,
-    combo: 0,
-    comboTimer: 0,
-    invulnerable: 0,
-    timeBonus: 0,
-    lifeBonus: 0,
+    unranked: false, phase: 'playing', score: 0, eggs: CONFIG.run.eggs, timeLeft: CONFIG.run.seconds, elapsed: 0,
+    combo: 0, comboTimer: 0, bestCombo: 0, scares: 0, hits: 0, runners: 0, cyclists: 0, defended: 0,
+    carolTime: 0, carolCooldown: 0, eggBonus: 0,
   }
 }
 
+/** Advance timers. Surviving to the end of the clock with eggs left wins the season. */
 export function tick(s: RunState, dt: number): RunState {
   if (s.phase !== 'playing') return s
   const timeLeft = Math.max(0, s.timeLeft - dt)
@@ -53,44 +50,62 @@ export function tick(s: RunState, dt: number): RunState {
     elapsed: s.elapsed + dt,
     comboTimer,
     combo: comboTimer > 0 ? s.combo : 0,
-    invulnerable: Math.max(0, s.invulnerable - dt),
+    carolTime: Math.max(0, s.carolTime - dt),
+    carolCooldown: Math.max(0, s.carolCooldown - dt),
   }
-  if (timeLeft <= 0) return { ...next, phase: 'lost', loseReason: 'time' }
+  if (timeLeft <= 0) {
+    const eggBonus = next.eggs * CONFIG.score.eggBonus
+    return { ...next, phase: 'won', eggBonus, score: next.score + eggBonus }
+  }
   return next
 }
 
-/** A core was picked up. Returns the new state and the points it was worth (for popups). */
-export function collect(s: RunState, rules = CONFIG): { state: RunState; points: number } {
+export function basePoints(kind: PersonKind, outcome: Outcome): number {
+  const sc = CONFIG.score
+  if (outcome === 'hit') return kind === 'cyclist' ? sc.hitCyclist : sc.hitRunner
+  return kind === 'cyclist' ? sc.scareCyclist : sc.scareRunner
+}
+
+/** A person was driven off by a scare or a direct hit. Returns the points it was worth. */
+export function scorePerson(s: RunState, kind: PersonKind, outcome: Outcome, inNest = false): { state: RunState; points: number } {
   if (s.phase !== 'playing') return { state: s, points: 0 }
-  const combo = Math.min(rules.score.comboMax, s.comboTimer > 0 ? s.combo + 1 : 1)
-  const points = rules.score.core * combo
-  const collected = s.collected + 1
-  let next: RunState = { ...s, score: s.score + points, combo, comboTimer: rules.score.comboWindow, collected }
-  if (collected >= s.total) {
-    const timeBonus = Math.ceil(next.timeLeft) * rules.score.timeBonus
-    const lifeBonus = next.lives * rules.score.lifeBonus
-    next = { ...next, phase: 'won', timeBonus, lifeBonus, score: next.score + timeBonus + lifeBonus }
+  const combo = Math.min(CONFIG.score.comboMax, s.comboTimer > 0 ? s.combo + 1 : 1)
+  const carolBoost = s.carolTime > 0 ? CONFIG.score.carolMultiplier : 1
+  const points = Math.round(basePoints(kind, outcome) * combo * carolBoost) + (inNest ? CONFIG.score.defendBonus : 0)
+  return {
+    points,
+    state: {
+      ...s,
+      score: s.score + points,
+      combo,
+      comboTimer: CONFIG.score.comboWindow,
+      bestCombo: Math.max(s.bestCombo, combo),
+      scares: s.scares + (outcome === 'scare' ? 1 : 0),
+      hits: s.hits + (outcome === 'hit' ? 1 : 0),
+      runners: s.runners + (kind === 'runner' ? 1 : 0),
+      cyclists: s.cyclists + (kind === 'cyclist' ? 1 : 0),
+      defended: s.defended + (inNest ? 1 : 0),
+    },
   }
-  return { state: next, points }
 }
 
-/** The player was hit or fell. Ignored while invulnerable unless `fell` (falling always costs a life). */
-export function damage(s: RunState, fell = false, rules = CONFIG): { state: RunState; hurt: boolean } {
-  if (s.phase !== 'playing') return { state: s, hurt: false }
-  if (!fell && s.invulnerable > 0) return { state: s, hurt: false }
-  const lives = s.lives - 1
-  const next: RunState = { ...s, lives, combo: 0, comboTimer: 0, invulnerable: rules.run.invulnerable }
-  if (lives <= 0) return { state: { ...next, lives: 0, phase: 'lost', loseReason: 'lives' }, hurt: true }
-  return { state: next, hurt: true }
+/** An intruder got past the nest unchallenged: lose an egg and the combo. */
+export function loseEgg(s: RunState): RunState {
+  if (s.phase !== 'playing' || s.eggs <= 0) return s
+  const eggs = s.eggs - 1
+  return { ...s, eggs, combo: 0, comboTimer: 0, phase: eggs <= 0 ? 'lost' : 'playing' }
 }
 
-/** Star rating on the results screen: 1 for finishing, +1 at half time left, +1 with no hits. */
-export function stars(s: RunState, rules = CONFIG): number {
+/** Start the territorial carol if it is off cooldown. */
+export function carol(s: RunState): { state: RunState; ok: boolean } {
+  if (s.phase !== 'playing' || s.carolCooldown > 0) return { state: s, ok: false }
+  return { ok: true, state: { ...s, carolTime: CONFIG.carol.buffTime, carolCooldown: CONFIG.carol.cooldown } }
+}
+
+/** 1 star for surviving the season, +1 for keeping every egg, +1 for a big score. */
+export function stars(s: RunState): number {
   if (s.phase !== 'won') return 0
-  let n = 1
-  if (s.timeLeft >= rules.run.seconds / 2) n += 1
-  if (s.lives === rules.run.lives) n += 1
-  return n
+  return 1 + (s.eggs >= CONFIG.run.eggs ? 1 : 0) + (s.score >= CONFIG.score.starScore ? 1 : 0)
 }
 
 export function formatClock(seconds: number): string {

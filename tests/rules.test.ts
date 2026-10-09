@@ -1,73 +1,69 @@
 import { describe, expect, it } from 'vitest'
 import { CONFIG } from '../src/game/config'
-import { collect, createRun, damage, formatClock, stars, tick } from '../src/game/rules'
+import { carol, createRun, formatClock, loseEgg, scorePerson, stars, tick } from '../src/game/rules'
 
 describe('run rules', () => {
-  it('scores cores with a combo multiplier that resets after the window', () => {
-    let s = createRun(10)
-    let r = collect(s)
-    expect(r.points).toBe(CONFIG.score.core)
-    s = collect(r.state).state
-    expect(s.combo).toBe(2)
-    expect(s.score).toBe(CONFIG.score.core * 3)
-    s = tick(s, CONFIG.score.comboWindow + 0.01)
+  it('scores scares and hits, cyclists worth more', () => {
+    const a = scorePerson(createRun(), 'runner', 'scare')
+    expect(a.points).toBe(CONFIG.score.scareRunner)
+    const b = scorePerson(createRun(), 'cyclist', 'hit')
+    expect(b.points).toBe(CONFIG.score.hitCyclist)
+    expect(b.state.hits).toBe(1)
+    expect(b.state.cyclists).toBe(1)
+    expect(a.state.scares).toBe(1)
+  })
+  it('builds a combo inside the window and resets it after', () => {
+    let s = scorePerson(createRun(), 'runner', 'scare').state
+    const second = scorePerson(s, 'runner', 'scare')
+    expect(second.points).toBe(CONFIG.score.scareRunner * 2)
+    s = tick(second.state, CONFIG.score.comboWindow + 0.1)
     expect(s.combo).toBe(0)
-    r = collect(s)
-    expect(r.points).toBe(CONFIG.score.core)
+    expect(scorePerson(s, 'runner', 'scare').points).toBe(CONFIG.score.scareRunner)
   })
-
   it('caps the combo', () => {
-    let s = createRun(20)
-    for (let i = 0; i < 10; i += 1) s = collect(s).state
+    let s = createRun()
+    for (let i = 0; i < 10; i += 1) s = scorePerson(s, 'runner', 'scare').state
     expect(s.combo).toBe(CONFIG.score.comboMax)
+    expect(s.bestCombo).toBe(CONFIG.score.comboMax)
   })
-
-  it('wins on the last core and adds time and life bonuses', () => {
-    let s = createRun(1)
-    s = tick(s, 10)
-    s = collect(s).state
-    expect(s.phase).toBe('won')
-    expect(s.timeBonus).toBe(Math.ceil(CONFIG.run.seconds - 10) * CONFIG.score.timeBonus)
-    expect(s.lifeBonus).toBe(CONFIG.run.lives * CONFIG.score.lifeBonus)
-    expect(s.score).toBe(CONFIG.score.core + s.timeBonus + s.lifeBonus)
+  it('adds the defend bonus for intruders in the nest zone', () => {
+    const r = scorePerson(createRun(), 'runner', 'scare', true)
+    expect(r.points).toBe(CONFIG.score.scareRunner + CONFIG.score.defendBonus)
+    expect(r.state.defended).toBe(1)
   })
-
-  it('ignores hits while invulnerable but not falls', () => {
-    let s = createRun(5)
-    s = damage(s).state
-    expect(s.lives).toBe(CONFIG.run.lives - 1)
-    expect(damage(s).hurt).toBe(false)
-    s = damage(s, true).state
-    expect(s.lives).toBe(CONFIG.run.lives - 2)
+  it('the carol buff multiplies points and then needs to recharge', () => {
+    const c = carol(createRun())
+    expect(c.ok).toBe(true)
+    expect(scorePerson(c.state, 'runner', 'scare').points).toBe(Math.round(CONFIG.score.scareRunner * CONFIG.score.carolMultiplier))
+    expect(carol(c.state).ok).toBe(false)
+    const later = tick(c.state, CONFIG.carol.cooldown + 0.01)
+    expect(later.carolTime).toBe(0)
+    expect(carol(later).ok).toBe(true)
   })
-
-  it('loses on zero lives or when time runs out', () => {
-    let s = createRun(5)
-    for (let i = 0; i < CONFIG.run.lives; i += 1) s = damage(s, true).state
+  it('loses when every egg is taken', () => {
+    let s = scorePerson(createRun(), 'runner', 'scare').state
+    s = loseEgg(s)
+    expect(s.eggs).toBe(CONFIG.run.eggs - 1)
+    expect(s.combo).toBe(0)
+    for (let i = 0; i < CONFIG.run.eggs; i += 1) s = loseEgg(s)
+    expect(s.eggs).toBe(0)
     expect(s.phase).toBe('lost')
-    expect(s.loseReason).toBe('lives')
-    const t = tick(createRun(5), CONFIG.run.seconds)
-    expect(t.phase).toBe('lost')
-    expect(t.loseReason).toBe('time')
+    expect(stars(s)).toBe(0)
+    expect(scorePerson(s, 'runner', 'hit').points).toBe(0)
   })
-
-  it('freezes state after the run ends', () => {
-    const lost = tick(createRun(5), CONFIG.run.seconds)
-    expect(tick(lost, 1)).toBe(lost)
-    expect(collect(lost).points).toBe(0)
+  it('wins the season at the end of the clock with an egg bonus', () => {
+    let s = scorePerson(createRun(), 'cyclist', 'hit').state
+    s = tick(s, CONFIG.run.seconds + 1)
+    expect(s.phase).toBe('won')
+    expect(s.eggBonus).toBe(CONFIG.run.eggs * CONFIG.score.eggBonus)
+    expect(s.score).toBe(CONFIG.score.hitCyclist + s.eggBonus)
+    expect(stars(s)).toBe(2)
+    expect(stars({ ...s, score: CONFIG.score.starScore })).toBe(3)
+    expect(stars({ ...s, eggs: 1 })).toBe(1)
   })
-
-  it('rates stars', () => {
-    let s = collect(createRun(1)).state
-    expect(stars(s)).toBe(3)
-    s = collect(damage(tick(createRun(1), CONFIG.run.seconds * 0.6)).state).state
-    expect(stars(s)).toBe(1)
-    expect(stars(createRun(1))).toBe(0)
-  })
-
   it('formats the clock', () => {
     expect(formatClock(150)).toBe('2:30')
-    expect(formatClock(59.2)).toBe('1:00')
-    expect(formatClock(0)).toBe('0:00')
+    expect(formatClock(9.2)).toBe('0:10')
+    expect(formatClock(-3)).toBe('0:00')
   })
 })

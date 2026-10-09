@@ -2,7 +2,7 @@ import type { Input } from '../engine/input'
 
 /**
  * On-screen touch controls: a floating stick on the left half, drag-to-look on the right half,
- * and JUMP / DASH buttons. Enabled automatically on the first touch.
+ * and SWOOP / BOOST / CAROL / SWITCH buttons. Enabled automatically on the first touch.
  */
 export class TouchControls {
   private stickId: number | null = null
@@ -69,7 +69,7 @@ export class TouchControls {
     window.addEventListener('pointercancel', end)
 
     for (const btn of layer.querySelectorAll<HTMLElement>('[data-touch]')) {
-      const action = btn.dataset.touch as 'jump' | 'dash'
+      const action = btn.dataset.touch as 'swoop' | 'boost' | 'call' | 'switch'
       btn.addEventListener('pointerdown', e => {
         e.preventDefault()
         btn.setPointerCapture(e.pointerId)

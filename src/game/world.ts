@@ -1,408 +1,444 @@
 import * as THREE from 'three'
-import type { Physics } from '../engine/physics'
-import { RAPIER } from '../engine/physics'
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js'
+import { CONFIG } from './config'
+import type { Obstacles } from './bird'
+import { FURNITURE, NEST_TREE, PARK, PERCHES, ROUTES, TREES, pathClearance, rng, type TreeDef } from './park'
 
 /**
- * Procedural sky-islands level. Everything is built from primitives and a seeded RNG, so the
- * starter ships no model files and the layout is identical on every load.
- *
- * To make a different level, edit ISLANDS / LINKS: stepping stones are generated automatically
- * so every link stays jumpable with the tuning in config.ts.
+ * Procedural suburban park in spring swooping season. Static scenery is baked into a few merged
+ * vertex-coloured meshes (cheap draw calls); the nest eggs and nest-zone ring stay separate
+ * because gameplay changes them.
  */
-export type Island = { x: number; z: number; top: number; r: number; cores: number; decor?: boolean }
-type Link = { a: number; b: number; kind: 'stones' | 'mover' }
-
-export const ISLANDS: Island[] = [
-  { x: 0, z: 0, top: 0, r: 7, cores: 2, decor: true },
-  { x: 15, z: 3, top: 1.5, r: 4, cores: 2, decor: true },
-  { x: 24, z: -8, top: 3.2, r: 3.5, cores: 2 },
-  { x: 14, z: -19, top: 4.8, r: 4.5, cores: 2, decor: true },
-  { x: 0, z: -27, top: 6.5, r: 5, cores: 2, decor: true },
-  { x: -15, z: -16, top: 4.5, r: 4, cores: 2, decor: true },
-  { x: -23, z: 1, top: 2.8, r: 3.5, cores: 2 },
-  { x: -11, z: 17, top: 1.2, r: 4.5, cores: 2, decor: true },
-  { x: 7, z: 17, top: 2.5, r: 3.5, cores: 2 },
-  // Summit: reached by the lift from island 4.
-  { x: 0, z: -12, top: 10.5, r: 3, cores: 3 },
-]
-
-const LINKS: Link[] = [
-  { a: 0, b: 1, kind: 'stones' },
-  { a: 1, b: 2, kind: 'stones' },
-  { a: 2, b: 3, kind: 'stones' },
-  { a: 3, b: 4, kind: 'stones' },
-  { a: 4, b: 5, kind: 'stones' },
-  { a: 5, b: 6, kind: 'stones' },
-  { a: 6, b: 7, kind: 'mover' },
-  { a: 7, b: 8, kind: 'stones' },
-  { a: 8, b: 0, kind: 'stones' },
-  { a: 4, b: 9, kind: 'mover' },
-]
-
-const STONE = 1.8
-const MAX_GAP = 2.3
-const MAX_RISE = 1.05
-
 export const PALETTE = {
-  skyTop: new THREE.Color('#2f6fd6'),
-  horizon: new THREE.Color('#ffd9b0'),
-  grass: new THREE.Color('#79cf6e'),
-  grassDark: new THREE.Color('#4fae5e'),
-  rock: new THREE.Color('#8b6b58'),
-  rockDark: new THREE.Color('#5d4639'),
-  stone: new THREE.Color('#e3cfa6'),
-  leaf: [new THREE.Color('#3f9a57'), new THREE.Color('#5bb85d'), new THREE.Color('#e0a44a')],
-  trunk: new THREE.Color('#7a4f35'),
-  crystal: new THREE.Color('#7ee8ff'),
+  skyTop: new THREE.Color('#3f86df'),
+  horizon: new THREE.Color('#d4e8f0'),
+  grass: ['#7fae4f', '#73a447', '#88b457', '#6c9a42'],
+  dryGrass: '#b5ad66',
+  bark: ['#ddd5c4', '#cbbd9f', '#b8a789', '#e8e1d2'],
+  barkDark: '#8f7c63',
+  leaves: ['#6f8a4a', '#829c55', '#5f7b43', '#93a868', '#7d9268'],
+  asphalt: '#5a6069',
+  gravel: '#c9a777',
+  concrete: '#bdb6aa',
 }
 
-/** Mulberry32: tiny deterministic RNG so the level never changes between loads. */
-export function rng(seed: number): () => number {
-  let a = seed >>> 0
-  return () => {
-    a = (a + 0x6d2b79f5) >>> 0
-    let t = a
-    t = Math.imul(t ^ (t >>> 15), t | 1)
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61)
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296
+type Paint = string | ((x: number, y: number, z: number) => string)
+
+/** Collects primitives with baked colours and transforms, then merges them into one mesh. */
+class Batch {
+  private parts: THREE.BufferGeometry[] = []
+  add(geometry: THREE.BufferGeometry, color: Paint, matrix?: THREE.Matrix4): void {
+    const g = geometry.index ? geometry.toNonIndexed() : geometry
+    g.deleteAttribute('uv')
+    if (matrix) g.applyMatrix4(matrix)
+    const pos = g.attributes.position
+    const colors = new Float32Array(pos.count * 3)
+    const c = new THREE.Color()
+    for (let i = 0; i < pos.count; i += 3) {
+      const hex = typeof color === 'string' ? color
+        : color((pos.getX(i) + pos.getX(i + 1) + pos.getX(i + 2)) / 3, (pos.getY(i) + pos.getY(i + 1) + pos.getY(i + 2)) / 3, (pos.getZ(i) + pos.getZ(i + 1) + pos.getZ(i + 2)) / 3)
+      c.set(hex)
+      for (let k = 0; k < 3; k += 1) c.toArray(colors, (i + k) * 3)
+    }
+    g.setAttribute('color', new THREE.BufferAttribute(colors, 3))
+    if (!g.attributes.normal) g.computeVertexNormals()
+    this.parts.push(g)
+  }
+  build(material: THREE.Material, shadows = true): THREE.Mesh {
+    const merged = mergeGeometries(this.parts, false)!
+    for (const p of this.parts) p.dispose()
+    this.parts = []
+    const mesh = new THREE.Mesh(merged, material)
+    mesh.castShadow = shadows
+    mesh.receiveShadow = true
+    return mesh
   }
 }
 
-/**
- * Plan stepping stones between two islands so every hop fits the jump: the smallest count whose
- * edge-to-edge gap and per-hop rise are within MAX_GAP / MAX_RISE. Pure; unit tested.
- */
-export function planStones(a: Island, b: Island): { x: number; z: number; top: number }[] {
-  const dx = b.x - a.x
-  const dz = b.z - a.z
-  const d = Math.hypot(dx, dz)
-  const gap = d - a.r - b.r
-  const dy = b.top - a.top
-  let n = 0
-  while ((gap - n * STONE) / (n + 1) > MAX_GAP || Math.abs(dy) / (n + 1) > MAX_RISE) n += 1
-  const g = (gap - n * STONE) / (n + 1)
-  const out: { x: number; z: number; top: number }[] = []
-  for (let i = 1; i <= n; i += 1) {
-    const along = a.r + g * i + STONE * (i - 0.5)
-    out.push({ x: a.x + (dx / d) * along, z: a.z + (dz / d) * along, top: a.top + (dy * i) / (n + 1) })
-  }
-  return out
+const M = new THREE.Matrix4()
+const Q = new THREE.Quaternion()
+const V = new THREE.Vector3()
+const S = new THREE.Vector3()
+const E = new THREE.Euler()
+function trs(x: number, y: number, z: number, rx = 0, ry = 0, rz = 0, sx = 1, sy = 1, sz = 1): THREE.Matrix4 {
+  return M.compose(V.set(x, y, z), Q.setFromEuler(E.set(rx, ry, rz)), S.set(sx, sy, sz)).clone()
 }
 
-export type MovingPlatform = {
-  mesh: THREE.Mesh
-  body: RAPIER.RigidBody
-  from: THREE.Vector3
-  to: THREE.Vector3
-  period: number
-  phase: number
-  /** Movement applied during the last fixed step; the player adds it while standing on top. */
-  delta: THREE.Vector3
-  half: THREE.Vector3
+/** Cylinder from a to b. */
+function limbMatrix(a: THREE.Vector3, b: THREE.Vector3): THREE.Matrix4 {
+  const mid = a.clone().add(b).multiplyScalar(0.5)
+  const q = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), b.clone().sub(a).normalize())
+  return new THREE.Matrix4().compose(mid, q, new THREE.Vector3(1, 1, 1))
 }
 
-export type DroneRoute = { center: THREE.Vector3; radius: number; phase: number; dir: 1 | -1 }
+const hash = (x: number, y: number, z: number) => {
+  const s = Math.sin(x * 12.9898 + y * 78.233 + z * 37.719) * 43758.5453
+  return s - Math.floor(s)
+}
 
 export class World {
   readonly scene = new THREE.Scene()
   readonly sun: THREE.DirectionalLight
-  readonly spawn = new THREE.Vector3(0, 1.2, 3)
-  readonly coreSpots: THREE.Vector3[] = []
-  readonly droneRoutes: DroneRoute[] = []
-  readonly movers: MovingPlatform[] = []
+  readonly obstacles: Obstacles = { trunks: [], blobs: [] }
+  /** Eggs in the nest, hidden one by one as they are lost. */
+  readonly eggs: THREE.Mesh[] = []
+  readonly nestPosition = new THREE.Vector3(PARK.nest.x, PARK.nestHeight, PARK.nest.z)
+  private ring: THREE.Mesh
+  private ringMat: THREE.MeshBasicMaterial
   private clouds: THREE.Object3D[] = []
+  private alert = 0
+  private time = 0
 
-  constructor(private readonly physics: Physics, shadowMapSize: number) {
-    const random = rng(1337)
+  constructor(shadowMapSize: number, lowDetail = false) {
     this.scene.background = PALETTE.horizon.clone()
-    this.scene.fog = new THREE.Fog(PALETTE.horizon, 45, 150)
-
+    this.scene.fog = new THREE.Fog(PALETTE.horizon, 70, 240)
     this.scene.add(this.makeSky())
-    this.scene.add(new THREE.HemisphereLight('#cfe8ff', '#6b5242', 1.0))
-    this.sun = new THREE.DirectionalLight('#fff0d8', 2.1)
+    this.scene.add(new THREE.HemisphereLight('#d6ecff', '#6d7f4a', 1.15))
+    this.sun = new THREE.DirectionalLight('#fff1d6', 2.5)
     this.sun.castShadow = true
     this.sun.shadow.mapSize.set(shadowMapSize, shadowMapSize)
     const cam = this.sun.shadow.camera
-    cam.left = cam.bottom = -26
-    cam.right = cam.top = 26
+    cam.left = cam.bottom = -38
+    cam.right = cam.top = 38
     cam.near = 1
-    cam.far = 90
-    this.sun.shadow.bias = -0.0004
-    this.sun.shadow.normalBias = 0.03
+    cam.far = 160
+    this.sun.shadow.bias = -0.0005
+    this.sun.shadow.normalBias = 0.04
     this.scene.add(this.sun, this.sun.target)
 
-    ISLANDS.forEach((island, i) => this.addIsland(island, i, random))
-    for (const link of LINKS) {
-      const a = ISLANDS[link.a]
-      const b = ISLANDS[link.b]
-      if (link.kind === 'stones') this.addStones(a, b, random)
-      else this.addMover(a, b, link.a * 7 + link.b)
-    }
-    this.addClouds(random)
-    this.addDistantIslands(random)
+    const solid = new THREE.MeshStandardMaterial({ vertexColors: true, flatShading: true, roughness: 0.9 })
+    this.scene.add(this.makeGround())
+    this.scene.add(this.makePaths())
 
-    // Patrol drones circle over the larger islands (never the spawn hub); the summit gets a tight guard.
-    for (const i of [1, 3, 5, 7]) {
-      const isl = ISLANDS[i]
-      this.droneRoutes.push({ center: new THREE.Vector3(isl.x, isl.top + 1.1, isl.z), radius: isl.r * 0.62, phase: random() * Math.PI * 2, dir: random() > 0.5 ? 1 : -1 })
+    const trunks = new Batch()
+    const leaves = new Batch()
+    const random = rng(31)
+    for (const t of TREES) this.gumTree(t, trunks, leaves, random, true)
+    this.nestTree(trunks, leaves)
+    const outside = rng(57)
+    for (let i = 0; i < (lowDetail ? 26 : 48); i += 1) {
+      const a = outside() * Math.PI * 2
+      const r = 92 + outside() * 50
+      this.gumTree({ x: Math.cos(a) * r, z: Math.sin(a) * r, height: 8 + outside() * 6, trunk: 0.4, crown: 3.5 + outside() * 2, lean: 0, seed: i }, trunks, leaves, outside, false)
     }
-    const summit = ISLANDS[9]
-    this.droneRoutes.push({ center: new THREE.Vector3(summit.x, summit.top + 1.1, summit.z), radius: 1.9, phase: 0, dir: 1 })
-  }
+    this.scene.add(trunks.build(solid))
+    this.scene.add(leaves.build(new THREE.MeshStandardMaterial({ vertexColors: true, flatShading: true, roughness: 0.85 })))
 
-  /** Per-frame ambience (clouds, shadow frustum follows the player). */
-  update(dt: number, focus: THREE.Vector3): void {
-    for (const c of this.clouds) {
-      c.position.x += dt * (c.userData.speed as number)
-      if (c.position.x > 120) c.position.x = -120
-    }
-    this.sun.position.set(focus.x + 18, focus.y + 34, focus.z + 12)
-    this.sun.target.position.copy(focus)
-  }
+    const props = new Batch()
+    this.fence(props)
+    this.furniture(props)
+    this.houses(props)
+    this.scene.add(props.build(solid))
 
-  /** Advance moving platforms by one fixed step and record their movement. */
-  stepMovers(elapsed: number): void {
-    for (const m of this.movers) {
-      // Ease in-out ping-pong with a pause at each end so boarding is forgiving.
-      const t = ((elapsed + m.phase) % m.period) / m.period
-      const tri = t < 0.5 ? t * 2 : 2 - t * 2
-      const k = THREE.MathUtils.smootherstep(THREE.MathUtils.clamp((tri - 0.12) / 0.76, 0, 1), 0, 1)
-      const target = new THREE.Vector3().lerpVectors(m.from, m.to, k)
-      const cur = m.body.translation()
-      m.delta.set(target.x - cur.x, target.y - cur.y, target.z - cur.z)
-      m.body.setNextKinematicTranslation(target)
-    }
+    this.scene.add(this.makeNest())
+    this.ringMat = new THREE.MeshBasicMaterial({ color: '#fff7e0', transparent: true, opacity: 0.32, depthWrite: false })
+    this.ring = new THREE.Mesh(new THREE.RingGeometry(CONFIG.run.nestRadius - 0.35, CONFIG.run.nestRadius, 96), this.ringMat)
+    this.ring.rotation.x = -Math.PI / 2
+    this.ring.position.set(PARK.nest.x, 0.06, PARK.nest.z)
+    this.scene.add(this.ring)
+    if (!lowDetail) this.scene.add(this.makeTufts())
+    this.makeClouds()
   }
 
   private makeSky(): THREE.Mesh {
-    const mat = new THREE.ShaderMaterial({
+    const geometry = new THREE.SphereGeometry(420, 32, 16)
+    const material = new THREE.ShaderMaterial({
       side: THREE.BackSide,
       depthWrite: false,
       fog: false,
-      uniforms: {
-        top: { value: PALETTE.skyTop },
-        horizon: { value: PALETTE.horizon },
-        sunDir: { value: new THREE.Vector3(18, 34, 12).normalize() },
-      },
-      vertexShader: /* glsl */ `
-        varying vec3 vDir;
-        void main() {
-          vDir = normalize(position);
-          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-        }`,
-      fragmentShader: /* glsl */ `
-        uniform vec3 top; uniform vec3 horizon; uniform vec3 sunDir;
-        varying vec3 vDir;
-        void main() {
-          float h = clamp(vDir.y, -1.0, 1.0);
-          vec3 col = mix(horizon, top, pow(max(h, 0.0), 0.55));
-          col = mix(col, horizon * 0.92, smoothstep(0.0, -0.4, h));
-          float s = max(dot(normalize(vDir), sunDir), 0.0);
-          col += vec3(1.0, 0.85, 0.6) * (pow(s, 600.0) * 3.0 + pow(s, 12.0) * 0.25);
-          gl_FragColor = vec4(col, 1.0);
-          #include <colorspace_fragment>
-        }`,
+      uniforms: { top: { value: PALETTE.skyTop }, horizon: { value: PALETTE.horizon } },
+      vertexShader: 'varying vec3 vDir; void main() { vDir = position; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
+      fragmentShader: 'uniform vec3 top; uniform vec3 horizon; varying vec3 vDir; void main() { float h = normalize(vDir).y; vec3 c = mix(horizon, top, pow(clamp(h, 0.0, 1.0), 0.5)); gl_FragColor = vec4(c, 1.0); }',
     })
-    const sky = new THREE.Mesh(new THREE.SphereGeometry(400, 32, 16), mat)
-    sky.renderOrder = -1
-    return sky
+    return new THREE.Mesh(geometry, material)
   }
 
-  private addIsland(isl: Island, index: number, random: () => number): void {
-    const group = new THREE.Group()
-    group.position.set(isl.x, isl.top, isl.z)
-
-    const topGeo = new THREE.CylinderGeometry(isl.r, isl.r * 0.94, 0.8, 22, 1)
-    const top = new THREE.Mesh(topGeo, flat(PALETTE.grass))
-    top.position.y = -0.4
-    top.receiveShadow = true
-    top.castShadow = true
-    group.add(top)
-
-    const rim = new THREE.Mesh(new THREE.CylinderGeometry(isl.r * 0.94, isl.r * 0.86, 0.6, 22, 1), flat(PALETTE.grassDark))
-    rim.position.y = -1.1
-    group.add(rim)
-
-    const under = new THREE.ConeGeometry(isl.r * 0.88, isl.r * 1.7 + 1.5, 14, 4)
-    jitter(under, random, 0.28 * isl.r * 0.35)
-    const rock = new THREE.Mesh(under, flat(PALETTE.rock))
-    rock.rotation.x = Math.PI
-    rock.position.y = -1.4 - (isl.r * 1.7 + 1.5) / 2
-    rock.castShadow = true
-    group.add(rock)
-    this.scene.add(group)
-
-    this.physics.addStaticCylinder(new THREE.Vector3(isl.x, isl.top - 0.4, isl.z), isl.r, 0.8)
-
-    // Core spots: spread around the island, away from the centre where the player lands.
-    for (let c = 0; c < isl.cores; c += 1) {
-      const angle = (c / isl.cores) * Math.PI * 2 + index * 1.3
-      const dist = isl.cores === 1 ? 0 : isl.r * 0.55
-      this.coreSpots.push(new THREE.Vector3(isl.x + Math.cos(angle) * dist, isl.top + 1.1, isl.z + Math.sin(angle) * dist))
+  private makeGround(): THREE.Mesh {
+    const g = new THREE.PlaneGeometry(520, 520, 130, 130)
+    g.rotateX(-Math.PI / 2)
+    const pos = g.attributes.position
+    const colors = new Float32Array(pos.count * 3)
+    const c = new THREE.Color()
+    for (let i = 0; i < pos.count; i += 1) {
+      const x = pos.getX(i)
+      const z = pos.getZ(i)
+      const r = Math.hypot(x, z)
+      const n = hash(Math.floor(x / 6), 0, Math.floor(z / 6))
+      const n2 = Math.sin(x * 0.07) * Math.cos(z * 0.05) + Math.sin((x + z) * 0.031)
+      if (r > 160) pos.setY(i, (r - 160) * 0.28 + Math.sin(x * 0.05) * Math.cos(z * 0.04) * 6)
+      if (r < PARK.fence) c.set(n2 > 1.1 ? PALETTE.dryGrass : PALETTE.grass[Math.floor(n * 4)])
+      else if (r < 80) c.set('#8fb35a')
+      else c.set(r > 160 ? '#7e9a62' : PALETTE.grass[Math.floor(n * 4)]).offsetHSL(0, -0.05, 0.02)
+      c.toArray(colors, i * 3)
     }
-
-    if (isl.decor) {
-      const trees = Math.round(isl.r * 0.6)
-      for (let t = 0; t < trees; t += 1) {
-        const angle = random() * Math.PI * 2
-        const dist = isl.r * (0.68 + random() * 0.2)
-        this.addTree(isl.x + Math.cos(angle) * dist, isl.top, isl.z + Math.sin(angle) * dist, 0.6 + random() * 0.4, random)
-      }
-    }
-    for (let k = 0; k < 3; k += 1) {
-      const angle = random() * Math.PI * 2
-      const dist = isl.r * (0.8 + random() * 0.12)
-      const crystal = new THREE.Mesh(new THREE.OctahedronGeometry(0.22 + random() * 0.18, 0), glow(PALETTE.crystal, 2.4))
-      crystal.scale.y = 2.2
-      crystal.position.set(isl.x + Math.cos(angle) * dist, isl.top + 0.3, isl.z + Math.sin(angle) * dist)
-      crystal.rotation.set(random() * 0.4, random() * 3, random() * 0.4)
-      this.scene.add(crystal)
-    }
-  }
-
-  private addTree(x: number, y: number, z: number, scale: number, random: () => number): void {
-    const tree = new THREE.Group()
-    tree.position.set(x, y, z)
-    tree.scale.setScalar(scale)
-    const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.14, 0.2, 1.1, 6), flat(PALETTE.trunk))
-    trunk.position.y = 0.55
-    trunk.castShadow = true
-    tree.add(trunk)
-    const leafColor = PALETTE.leaf[Math.floor(random() * PALETTE.leaf.length)]
-    for (let i = 0; i < 2; i += 1) {
-      const leaves = new THREE.Mesh(new THREE.IcosahedronGeometry(0.75 - i * 0.2, 0), flat(leafColor))
-      leaves.position.set((random() - 0.5) * 0.2, 1.35 + i * 0.6, (random() - 0.5) * 0.2)
-      leaves.rotation.set(random(), random(), random())
-      leaves.castShadow = true
-      tree.add(leaves)
-    }
-    this.scene.add(tree)
-    this.physics.addStaticCylinder(new THREE.Vector3(x, y + 1.2 * scale, z), 0.28 * scale, 2.4 * scale)
-  }
-
-  private addStones(a: Island, b: Island, random: () => number): void {
-    const stones = planStones(a, b)
-    stones.forEach((s, i) => {
-      const mesh = new THREE.Mesh(new THREE.BoxGeometry(STONE, 0.55, STONE), flat(PALETTE.stone))
-      const rot = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), random() * Math.PI)
-      mesh.position.set(s.x, s.top - 0.275, s.z)
-      mesh.quaternion.copy(rot)
-      mesh.castShadow = true
-      mesh.receiveShadow = true
-      const underside = new THREE.Mesh(new THREE.ConeGeometry(STONE * 0.62, 1.4, 5), flat(PALETTE.rockDark))
-      underside.rotation.x = Math.PI
-      underside.position.y = -0.95
-      mesh.add(underside)
-      this.scene.add(mesh)
-      this.physics.addStaticBox(mesh.position, new THREE.Vector3(STONE, 0.55, STONE), rot)
-      // Every other stone carries a core to pull the player along the route.
-      if (i % 2 === 1) this.coreSpots.push(new THREE.Vector3(s.x, s.top + 1.1, s.z))
-    })
-  }
-
-  private addMover(a: Island, b: Island, seed: number): void {
-    const dir = new THREE.Vector3(b.x - a.x, 0, b.z - a.z).normalize()
-    const half = new THREE.Vector3(1.3, 0.25, 1.3)
-    const from = new THREE.Vector3(a.x, a.top - half.y, a.z).addScaledVector(dir, a.r + half.x + 0.25)
-    const to = new THREE.Vector3(b.x, b.top - half.y, b.z).addScaledVector(dir, -(b.r + half.x + 0.25))
-    const mesh = new THREE.Mesh(new THREE.BoxGeometry(half.x * 2, half.y * 2, half.z * 2), flat(new THREE.Color('#f2b84b')))
-    mesh.castShadow = true
+    g.setAttribute('color', new THREE.BufferAttribute(colors, 3))
+    g.computeVertexNormals()
+    const mesh = new THREE.Mesh(g, new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 1 }))
     mesh.receiveShadow = true
-    const stripe = new THREE.Mesh(new THREE.BoxGeometry(half.x * 2 + 0.02, 0.1, 0.35), glow(new THREE.Color('#ffefb0'), 3))
-    stripe.position.y = half.y - 0.02
-    mesh.add(stripe)
-    mesh.position.copy(from)
-    this.scene.add(mesh)
-    const body = this.physics.addKinematic(mesh, RAPIER.ColliderDesc.cuboid(half.x, half.y, half.z).setFriction(1))
-    const period = Math.max(6, from.distanceTo(to) * 0.9)
-    this.movers.push({ mesh, body, from, to, period, phase: (seed % 5) * 0.7, delta: new THREE.Vector3(), half })
+    return mesh
   }
 
-  private addClouds(random: () => number): void {
-    // Unlit with baked top-to-bottom shading: soft and bright without tripping the bloom threshold.
-    const mat = new THREE.MeshBasicMaterial({ vertexColors: true })
-    for (let i = 0; i < 26; i += 1) {
-      const cloud = new THREE.Group()
-      const puffs = 3 + Math.floor(random() * 4)
-      for (let p = 0; p < puffs; p += 1) {
-        const puff = new THREE.Mesh(shadeCloud(new THREE.IcosahedronGeometry(1.4 + random() * 1.6, 1)), mat)
-        puff.position.set(p * 1.6 - puffs * 0.8, random() * 0.8, (random() - 0.5) * 1.6)
-        puff.scale.y = 0.62
-        cloud.add(puff)
+  private makePaths(): THREE.Group {
+    const group = new THREE.Group()
+    const ribbon = (pts: { x: number; z: number }[], width: number, y: number, color: string, dashed = false) => {
+      const positions: number[] = []
+      for (let i = 0; i < pts.length - 1; i += 1) {
+        if (dashed && i % 4 >= 2) continue
+        const a = pts[i]
+        const b = pts[i + 1]
+        const dx = b.x - a.x
+        const dz = b.z - a.z
+        const len = Math.hypot(dx, dz) || 1
+        const nx = (-dz / len) * width * 0.5
+        const nz = (dx / len) * width * 0.5
+        positions.push(a.x + nx, y, a.z + nz, b.x + nx, y, b.z + nz, b.x - nx, y, b.z - nz)
+        positions.push(a.x + nx, y, a.z + nz, b.x - nx, y, b.z - nz, a.x - nx, y, a.z - nz)
       }
-      const low = random() < 0.6
-      cloud.position.set((random() - 0.5) * 240, low ? -14 - random() * 12 : 18 + random() * 16, (random() - 0.5) * 200)
-      cloud.scale.setScalar(low ? 2.4 + random() * 2 : 1.2 + random())
-      cloud.userData.speed = 0.6 + random() * 0.8
-      this.clouds.push(cloud)
+      const g = new THREE.BufferGeometry()
+      g.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3))
+      g.computeVertexNormals()
+      // Normals point up regardless of winding.
+      const nrm = g.attributes.normal
+      for (let i = 0; i < nrm.count; i += 1) nrm.setXYZ(i, 0, 1, 0)
+      const mesh = new THREE.Mesh(g, new THREE.MeshStandardMaterial({ color, roughness: 0.95, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -1 - y * 10 }))
+      mesh.receiveShadow = true
+      group.add(mesh)
+    }
+    // Suburban road ring outside the fence.
+    const road = new THREE.Mesh(new THREE.RingGeometry(80, 87, 160), new THREE.MeshStandardMaterial({ color: '#4b5059', roughness: 0.95, polygonOffset: true, polygonOffsetFactor: -1 }))
+    road.rotation.x = -Math.PI / 2
+    road.position.y = 0.02
+    road.receiveShadow = true
+    group.add(road)
+    for (const route of ROUTES) {
+      const color = route.def.surface === 'asphalt' ? PALETTE.asphalt : route.def.surface === 'gravel' ? PALETTE.gravel : PALETTE.concrete
+      ribbon(route.pts, route.def.width + 0.5, 0.03, '#a59c80')
+      ribbon(route.pts, route.def.width, 0.05, color)
+      if (route.def.surface === 'asphalt') ribbon(route.pts, 0.14, 0.07, '#f2efe6', true)
+    }
+    return group
+  }
+
+  private gumTree(t: TreeDef, trunks: Batch, leaves: Batch, random: () => number, collide: boolean): void {
+    const h0 = t.height * 0.55
+    const barkPaint = (x: number, y: number, z: number) => {
+      const n = hash(Math.round(x * 3), Math.round(y * 2), Math.round(z * 3))
+      return n > 0.82 ? PALETTE.barkDark : PALETTE.bark[Math.floor(n * 3.9)]
+    }
+    const top = new THREE.Vector3(t.x + Math.sin(t.lean) * h0, h0, t.z)
+    trunks.add(new THREE.CylinderGeometry(t.trunk * 0.6, t.trunk * 1.15, h0, 7, 3), barkPaint, limbMatrix(new THREE.Vector3(t.x, 0, t.z), top))
+    if (collide) this.obstacles.trunks.push({ x: t.x, z: t.z, r: t.trunk * 1.1, top: h0 + 0.5 })
+    const limbs = 3 + Math.floor(random() * 2)
+    for (let i = 0; i < limbs; i += 1) {
+      const a = (i / limbs) * Math.PI * 2 + random() * 0.8
+      const out = t.crown * (0.55 + random() * 0.35)
+      const tip = new THREE.Vector3(top.x + Math.cos(a) * out, h0 + t.height * (0.28 + random() * 0.2), top.z + Math.sin(a) * out)
+      trunks.add(new THREE.CylinderGeometry(t.trunk * 0.22, t.trunk * 0.45, top.distanceTo(tip), 5), barkPaint, limbMatrix(top, tip))
+      this.canopy(tip.x, tip.y + 0.6, tip.z, t.crown * (0.5 + random() * 0.25), leaves, random, collide)
+    }
+    this.canopy(top.x, t.height, top.z, t.crown * 0.6, leaves, random, collide)
+  }
+
+  private canopy(x: number, y: number, z: number, r: number, leaves: Batch, random: () => number, collide: boolean): void {
+    const colour = PALETTE.leaves[Math.floor(random() * PALETTE.leaves.length)]
+    const leafPaint = (px: number, py: number, pz: number) => (hash(px * 2, py * 2, pz * 2) > 0.7 ? PALETTE.leaves[Math.floor(hash(px, py, pz) * 5)] : colour)
+    leaves.add(new THREE.IcosahedronGeometry(r, 1), leafPaint, trs(x, y, z, random(), random(), 0, 1, 0.62, 1))
+    for (let i = 0; i < 2; i += 1) {
+      const a = random() * Math.PI * 2
+      leaves.add(new THREE.IcosahedronGeometry(r * 0.6, 0), leafPaint, trs(x + Math.cos(a) * r * 0.75, y - r * 0.15, z + Math.sin(a) * r * 0.75, random(), random(), 0, 1, 0.7, 1))
+    }
+    if (collide) this.obstacles.blobs.push({ x, y, z, r: r * 0.8 })
+  }
+
+  private nestTree(trunks: Batch, leaves: Batch): void {
+    const t = NEST_TREE
+    const h0 = PARK.nestHeight - 0.2
+    const random = rng(t.seed)
+    const barkPaint = (x: number, y: number, z: number) => {
+      const n = hash(Math.round(x * 3), Math.round(y * 2), Math.round(z * 3))
+      return n > 0.82 ? PALETTE.barkDark : PALETTE.bark[Math.floor(n * 3.9)]
+    }
+    const base = new THREE.Vector3(t.x, 0, t.z)
+    const top = new THREE.Vector3(t.x, h0, t.z)
+    trunks.add(new THREE.CylinderGeometry(t.trunk * 0.7, t.trunk * 1.3, h0, 9, 4), barkPaint, limbMatrix(base, top))
+    this.obstacles.trunks.push({ x: t.x, z: t.z, r: t.trunk * 1.2, top: h0 })
+    // One limb out to each perch, with a leafy crown above and beyond it.
+    for (const p of PERCHES) {
+      const tip = new THREE.Vector3(p.x, p.y - 0.42, p.z)
+      trunks.add(new THREE.CylinderGeometry(0.1, 0.24, top.distanceTo(tip), 6), barkPaint, limbMatrix(top, tip))
+      const out = new THREE.Vector3(p.x - t.x, 0, p.z - t.z).normalize()
+      this.canopy(p.x + out.x * 2.2, p.y + 2.2, p.z + out.z * 2.2, 2.5, leaves, random, true)
+    }
+    for (let i = 0; i < 3; i += 1) {
+      const a = (i / 3) * Math.PI * 2 + 0.9
+      const tip = new THREE.Vector3(t.x + Math.cos(a) * 3.4, h0 + 3.4, t.z + Math.sin(a) * 3.4)
+      trunks.add(new THREE.CylinderGeometry(0.1, 0.22, top.distanceTo(tip), 6), barkPaint, limbMatrix(top, tip))
+      this.canopy(tip.x, tip.y + 0.8, tip.z, 2.8, leaves, random, true)
+    }
+    this.canopy(t.x, h0 + 5, t.z, 3.2, leaves, random, true)
+  }
+
+  private makeNest(): THREE.Group {
+    const group = new THREE.Group()
+    group.position.copy(this.nestPosition)
+    const sticks = new THREE.Mesh(new THREE.TorusGeometry(0.55, 0.24, 6, 12), new THREE.MeshStandardMaterial({ color: '#6e4b2c', flatShading: true, roughness: 1 }))
+    sticks.rotation.x = Math.PI / 2
+    sticks.scale.set(1, 1, 0.7)
+    sticks.castShadow = true
+    const lining = new THREE.Mesh(new THREE.CircleGeometry(0.5, 12), new THREE.MeshStandardMaterial({ color: '#4a3220', roughness: 1 }))
+    lining.rotation.x = -Math.PI / 2
+    lining.position.y = -0.05
+    group.add(sticks, lining)
+    const eggMat = new THREE.MeshStandardMaterial({ color: '#9cc9b6', roughness: 0.5, flatShading: true })
+    for (let i = 0; i < CONFIG.run.eggs; i += 1) {
+      const a = (i / CONFIG.run.eggs) * Math.PI * 2
+      const egg = new THREE.Mesh(new THREE.IcosahedronGeometry(0.14, 1), eggMat)
+      egg.scale.set(1, 1.3, 1)
+      egg.position.set(Math.cos(a) * 0.2, 0.08, Math.sin(a) * 0.2)
+      egg.rotation.set(0.6, a, 0.3)
+      group.add(egg)
+      this.eggs.push(egg)
+    }
+    return group
+  }
+
+  private fence(props: Batch): void {
+    const R = PARK.fence
+    // Gaps where paths pass through the fence.
+    const gaps: number[] = []
+    for (const route of ROUTES) {
+      for (const p of route.pts) {
+        if (Math.abs(Math.hypot(p.x, p.z) - R) < 0.6) gaps.push(Math.atan2(p.z, p.x))
+      }
+    }
+    const inGap = (a: number) => gaps.some(g => Math.abs(Math.atan2(Math.sin(a - g), Math.cos(a - g))) * R < 3.2)
+    const step = 3 / R
+    for (let a = 0; a < Math.PI * 2; a += step) {
+      if (inGap(a)) continue
+      const x = Math.cos(a) * R
+      const z = Math.sin(a) * R
+      props.add(new THREE.BoxGeometry(0.16, 1.1, 0.16), '#86664a', trs(x, 0.55, z, 0, -a))
+      if (inGap(a + step)) continue
+      const mx = Math.cos(a + step / 2) * R
+      const mz = Math.sin(a + step / 2) * R
+      for (const y of [0.45, 0.9]) props.add(new THREE.BoxGeometry(0.08, 0.1, 3.05), '#9b7a58', trs(mx, y, mz, 0, -a - step / 2))
+    }
+  }
+
+  private furniture(props: Batch): void {
+    for (const f of FURNITURE) {
+      if (f.kind === 'bench') {
+        const at = (dx: number, y: number, dz: number) => {
+          const c = Math.cos(f.yaw)
+          const s = Math.sin(f.yaw)
+          return [f.x + dx * c + dz * s, y, f.z - dx * s + dz * c] as const
+        }
+        const [x, , z] = at(0, 0, 0)
+        props.add(new THREE.BoxGeometry(1.7, 0.08, 0.45), '#a5713f', trs(x, 0.46, z, 0, f.yaw))
+        const [bx, , bz] = at(0, 0, -0.22)
+        props.add(new THREE.BoxGeometry(1.7, 0.32, 0.06), '#99683a', trs(bx, 0.76, bz, -0.2, f.yaw))
+        for (const side of [-0.7, 0.7]) {
+          const [lx, , lz] = at(side, 0, 0)
+          props.add(new THREE.BoxGeometry(0.08, 0.46, 0.45), '#3b3f46', trs(lx, 0.23, lz, 0, f.yaw))
+        }
+      } else if (f.kind === 'lamp') {
+        props.add(new THREE.CylinderGeometry(0.06, 0.09, 4.2, 6), '#3e444d', trs(f.x, 2.1, f.z))
+        props.add(new THREE.BoxGeometry(0.5, 0.18, 0.3), '#30353c', trs(f.x, 4.25, f.z, 0, f.yaw))
+        this.obstacles.trunks.push({ x: f.x, z: f.z, r: 0.1, top: 4.4 })
+      } else {
+        props.add(new THREE.BoxGeometry(0.55, 0.9, 0.6), '#2f6b3c', trs(f.x, 0.45, f.z, 0, f.yaw))
+        props.add(new THREE.BoxGeometry(0.6, 0.06, 0.66), '#c33d2c', trs(f.x, 0.93, f.z, 0, f.yaw))
+      }
+    }
+  }
+
+  private houses(props: Batch): void {
+    const random = rng(808)
+    const walls = ['#cdb79c', '#e9dfc8', '#b5674a', '#d9d3c5', '#a9b9ae', '#c78f6a']
+    const roofs = ['#a94e2c', '#596069', '#3f4b58', '#8f3d2b', '#6d737b']
+    for (const ring of [100, 124]) {
+      const count = Math.floor((Math.PI * 2 * ring) / 15)
+      for (let i = 0; i < count; i += 1) {
+        const a = (i / count) * Math.PI * 2 + random() * 0.05 + (ring === 124 ? 0.1 : 0)
+        const r = ring + random() * 5
+        const x = Math.cos(a) * r
+        const z = Math.sin(a) * r
+        const w = 9 + random() * 3
+        const d = 8 + random() * 3
+        const h = 2.8 + (random() < 0.2 ? 2.6 : 0)
+        const yaw = -a + Math.PI / 2
+        props.add(new THREE.BoxGeometry(w, h, d), walls[Math.floor(random() * walls.length)], trs(x, h / 2, z, 0, yaw))
+        const roof = new THREE.ConeGeometry(Math.SQRT1_2, 1, 4, 1)
+        roof.rotateY(Math.PI / 4)
+        props.add(roof, roofs[Math.floor(random() * roofs.length)], trs(x, h + 1.1, z, 0, yaw, 0, w * 1.08, 2.2, d * 1.08))
+        if (random() < 0.6) props.add(new THREE.BoxGeometry(1.2, 1.5, 0.06), '#5b7a99', trs(x + Math.cos(a) * -d * 0.51, 1.4, z + Math.sin(a) * -d * 0.51, 0, yaw))
+      }
+    }
+  }
+
+  private makeTufts(): THREE.InstancedMesh {
+    const random = rng(5150)
+    const count = 1600
+    const mesh = new THREE.InstancedMesh(new THREE.ConeGeometry(0.09, 0.4, 3), new THREE.MeshStandardMaterial({ color: '#ffffff', flatShading: true, roughness: 1 }), count)
+    const flowerColor = new THREE.Color('#f2cf2b')
+    const grassColor = new THREE.Color('#6e9d43')
+    let n = 0
+    while (n < count) {
+      const a = random() * Math.PI * 2
+      const r = Math.sqrt(random()) * (PARK.fence - 1)
+      const x = Math.cos(a) * r
+      const z = Math.sin(a) * r
+      if (pathClearance(x, z) < 0.4) continue
+      const flower = random() < 0.18
+      mesh.setMatrixAt(n, trs(x, flower ? 0.1 : 0.2, z, 0, random() * 3, 0, flower ? 1.2 : 1, flower ? 0.4 : 0.7 + random() * 0.8, flower ? 1.2 : 1))
+      mesh.setColorAt(n, flower ? flowerColor : grassColor)
+      n += 1
+    }
+    mesh.receiveShadow = true
+    return mesh
+  }
+
+  private makeClouds(): void {
+    const random = rng(99)
+    const material = new THREE.MeshStandardMaterial({ color: '#ffffff', flatShading: true, roughness: 1, emissive: '#dfe9f2', emissiveIntensity: 0.35, fog: false })
+    for (let i = 0; i < 10; i += 1) {
+      const parts: THREE.BufferGeometry[] = []
+      for (let k = 0; k < 5; k += 1) {
+        const g = new THREE.IcosahedronGeometry(4 + random() * 4, 0)
+        g.translate((k - 2) * 5 + random() * 2, random() * 2, random() * 4)
+        parts.push(g)
+      }
+      const cloud = new THREE.Mesh(mergeGeometries(parts), material)
+      const a = random() * Math.PI * 2
+      const r = 80 + random() * 160
+      cloud.position.set(Math.cos(a) * r, 70 + random() * 30, Math.sin(a) * r)
+      cloud.scale.y = 0.55
       this.scene.add(cloud)
+      this.clouds.push(cloud)
     }
   }
 
-  private addDistantIslands(random: () => number): void {
-    for (let i = 0; i < 9; i += 1) {
-      const angle = (i / 9) * Math.PI * 2 + random() * 0.4
-      const dist = 75 + random() * 35
-      const r = 5 + random() * 7
-      const g = new THREE.Group()
-      const top = new THREE.Mesh(new THREE.CylinderGeometry(r, r * 0.9, 1.2, 12), flat(PALETTE.grassDark))
-      const under = new THREE.ConeGeometry(r * 0.85, r * 2.2, 9, 2)
-      jitter(under, random, r * 0.12)
-      const rock = new THREE.Mesh(under, flat(PALETTE.rockDark))
-      rock.rotation.x = Math.PI
-      rock.position.y = -r * 1.1 - 0.6
-      g.add(top, rock)
-      g.position.set(Math.cos(angle) * dist, -6 + random() * 22, Math.sin(angle) * dist)
-      this.scene.add(g)
+  setEggs(count: number): void {
+    this.eggs.forEach((egg, i) => (egg.visible = i < count))
+  }
+
+  /** 0 = calm, 1 = an intruder is inside the nest zone. */
+  setNestAlert(level: number): void {
+    this.alert = level
+  }
+
+  /** Keep the shadow camera on the action, drift clouds, pulse the nest ring. */
+  update(focus: THREE.Vector3, dt: number): void {
+    this.time += dt
+    this.sun.position.set(focus.x + 34, 58, focus.z + 22)
+    this.sun.target.position.set(focus.x, 0, focus.z)
+    for (const c of this.clouds) {
+      c.position.x += dt * 1.2
+      if (c.position.x > 260) c.position.x = -260
     }
+    const pulse = this.alert > 0 ? 0.45 + 0.35 * Math.sin(this.time * 8) : 0.3
+    this.ringMat.opacity = pulse
+    this.ringMat.color.set(this.alert > 0 ? '#ff4d4d' : '#fff7e0')
+    this.ring.scale.setScalar(1 + (this.alert > 0 ? Math.sin(this.time * 8) * 0.01 : 0))
   }
-}
-
-const materialCache = new Map<string, THREE.Material>()
-function flat(color: THREE.Color): THREE.MeshStandardMaterial {
-  const key = `flat:${color.getHexString()}`
-  let m = materialCache.get(key) as THREE.MeshStandardMaterial | undefined
-  if (!m) {
-    m = new THREE.MeshStandardMaterial({ color, flatShading: true, roughness: 0.92, metalness: 0 })
-    materialCache.set(key, m)
-  }
-  return m
-}
-
-export function glow(color: THREE.Color, intensity: number): THREE.MeshStandardMaterial {
-  return new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: intensity, flatShading: true, roughness: 0.3 })
-}
-
-function shadeCloud(geo: THREE.BufferGeometry): THREE.BufferGeometry {
-  const pos = geo.attributes.position
-  geo.computeBoundingBox()
-  const { min, max } = geo.boundingBox!
-  const colors = new Float32Array(pos.count * 3)
-  const top = new THREE.Color('#ffffff')
-  const bottom = new THREE.Color('#c9cfe6')
-  const c = new THREE.Color()
-  for (let i = 0; i < pos.count; i += 1) {
-    c.lerpColors(bottom, top, (pos.getY(i) - min.y) / (max.y - min.y))
-    colors.set([c.r, c.g, c.b], i * 3)
-  }
-  geo.setAttribute('color', new THREE.BufferAttribute(colors, 3))
-  return geo
-}
-
-/** Displace vertices so primitives read as hand-carved rock, keeping shared seams closed. */
-function jitter(geo: THREE.BufferGeometry, random: () => number, amount: number): void {
-  const pos = geo.attributes.position as THREE.BufferAttribute
-  const offsets = new Map<string, THREE.Vector3>()
-  const v = new THREE.Vector3()
-  for (let i = 0; i < pos.count; i += 1) {
-    v.fromBufferAttribute(pos, i)
-    const key = `${v.x.toFixed(3)},${v.y.toFixed(3)},${v.z.toFixed(3)}`
-    let o = offsets.get(key)
-    if (!o) {
-      o = new THREE.Vector3((random() - 0.5) * amount, (random() - 0.5) * amount, (random() - 0.5) * amount)
-      offsets.set(key, o)
-    }
-    pos.setXYZ(i, v.x + o.x, v.y + o.y, v.z + o.z)
-  }
-  geo.computeVertexNormals()
 }

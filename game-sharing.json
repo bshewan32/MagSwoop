@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 2,
+  "title": "Magpie Sky Patrol",
+  "description": "It's swooping season! Take control of a family of Australian magpies and dive-bomb runners and cyclists to defend your nest. Switch between a pied, a scruffy mottled and a blackback magpie, each with their own carol.",
+  "defaultCaptions": {
+    "x": "It's swooping season. I'm the magpie now. Dive-bomb cyclists and runners to defend the nest in Magpie Sky Patrol!",
+    "facebook": "Every spring, the magpies win. Play Magpie Sky Patrol: swoop on runners and cyclists, switch between three magpies and carol to protect your eggs.",
+    "reddit": "Made a 3D game where you're the Australian magpie swooping cyclists in spring",
+    "discord": "Magpie Sky Patrol: swoop cyclists, scare joggers, defend the nest. Can you keep all three eggs?"
+  },
+  "assets": {
+    "og": "assets/share/og.png",
+    "favicon": "assets/share/favicon.png"
+  }
+}

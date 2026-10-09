@@ -4,25 +4,29 @@
  *
  * Call `endFrame()` once per rendered frame after gameplay consumed edge-triggered presses.
  */
-export type Action = 'jump' | 'sprint' | 'dash' | 'pause' | 'confirm' | 'back' | 'interact'
+export type Action = 'flap' | 'boost' | 'swoop' | 'call' | 'switch' | 'bird1' | 'bird2' | 'bird3' | 'pause' | 'confirm' | 'back'
 export type InputMethod = 'keyboard' | 'gamepad' | 'touch'
 
 const KEY_BINDINGS: Record<Action, string[]> = {
-  jump: ['Space'],
-  sprint: ['ShiftLeft', 'ShiftRight'],
-  dash: ['KeyF', 'KeyJ'],
+  flap: ['Space'],
+  boost: ['ShiftLeft', 'ShiftRight'],
+  swoop: ['KeyF', 'KeyJ'],
+  call: ['KeyE', 'KeyR'],
+  switch: ['KeyQ', 'Tab'],
+  bird1: ['Digit1', 'Numpad1'],
+  bird2: ['Digit2', 'Numpad2'],
+  bird3: ['Digit3', 'Numpad3'],
   pause: ['Escape', 'KeyP'],
   confirm: ['Enter', 'NumpadEnter'],
   // Menus handle Escape/Backspace themselves via DOM keydown; `back` is the gamepad B button.
   back: [],
-  interact: ['KeyE'],
 }
 const MOVE_KEYS = { up: ['KeyW', 'ArrowUp'], down: ['KeyS', 'ArrowDown'], left: ['KeyA', 'ArrowLeft'], right: ['KeyD', 'ArrowRight'] }
-// Standard gamepad mapping: A=0, B=1, X=2, Y=3, LB=4, RB=5, RT=7, Start=9, L3=10.
-const PAD_BINDINGS: Record<Action, number[]> = { jump: [0], sprint: [4, 10], dash: [2, 5, 7], pause: [9], confirm: [0], back: [1], interact: [3] }
+// Standard gamepad mapping: A=0, B=1, X=2, Y=3, LB=4, RB=5, LT=6, RT=7, Start=9, L3=10.
+const PAD_BINDINGS: Record<Action, number[]> = { flap: [0], boost: [5, 6, 10], swoop: [2, 7], call: [3], switch: [4], bird1: [], bird2: [], bird3: [], pause: [9], confirm: [0], back: [1] }
 
 export class Input {
-  /** Movement intent in [-1, 1]: x = strafe right, y = forward. */
+  /** Steering intent in [-1, 1]: x = turn right, y = climb. */
   readonly move = { x: 0, y: 0 }
   /** Camera look delta accumulated since the last `endFrame()` (radians-ish units, pre-sensitivity). */
   readonly look = { x: 0, y: 0 }
@@ -54,12 +58,14 @@ export class Input {
       // Keep the page from scrolling, but never block typing in text fields (leaderboard name).
       const typing = (e.target as HTMLElement | null)?.matches?.('input, textarea')
       if (!typing && (e.code === 'Space' || e.code.startsWith('Arrow'))) e.preventDefault()
+      // Tab switches magpie in flight; keep it from moving browser focus while the mouse is captured.
+      if (e.code === 'Tab' && document.pointerLockElement === canvas) e.preventDefault()
     })
     on(window, 'keyup', e => this.keys.delete(e.code))
     on(window, 'blur', () => this.keys.clear())
     on(window, 'mousedown', e => {
-      // Left click dashes while the mouse is captured for camera look.
-      if (document.pointerLockElement === canvas && e.button === 0) this.pressed_.add('dash')
+      // Left click swoops while the mouse is captured for steering.
+      if (document.pointerLockElement === canvas && e.button === 0) this.pressed_.add('swoop')
     })
     on(window, 'mousemove', e => {
       if (document.pointerLockElement !== canvas) return

@@ -1,6 +1,6 @@
 import './styles/main.css'
 import { Audio } from './engine/audio'
-import { I18n, resolveLocale } from './engine/i18n'
+import { I18n } from './engine/i18n'
 import { Input } from './engine/input'
 import { GameLoop } from './engine/loop'
 import { SAVE_KEY, SaveStore, type SaveData } from './engine/save'
@@ -13,7 +13,7 @@ async function boot(): Promise<void> {
   const firstRun = safeGet(SAVE_KEY) === null
   const save = new SaveStore()
 
-  const i18n = new I18n(resolveLocale(save.data.locale, navigator.languages))
+  const i18n = new I18n()
   const input = new Input(canvas)
   const audio = new Audio()
   let game: Game | undefined
@@ -22,14 +22,14 @@ async function boot(): Promise<void> {
   const applySettings = (d: SaveData) => {
     input.sensitivity = d.sensitivity
     input.invertY = d.invertY
-    audio.setVolumes(d.musicVolume, d.sfxVolume, d.muted)
+    audio.setVolumes(d.musicVolume, d.sfxVolume, d.callsVolume, d.muted)
     if (game) game.reducedMotion = d.reducedMotion
   }
 
   const startRun = (tutorial: boolean) => {
     if (!game) return
     audio.unlock()
-    audio.startMusic()
+    audio.startAmbience()
     game.start(tutorial)
     ui.show('hud')
     loop.resetAccumulator()
@@ -62,25 +62,22 @@ async function boot(): Promise<void> {
       const qualityChanged = patch.quality !== undefined && patch.quality !== save.data.quality
       save.update(patch)
       applySettings(save.data)
-      if (patch.locale) i18n.set(patch.locale)
       if (qualityChanged) game?.setQuality(save.data.quality)
     },
   })
   ui.show('boot')
   applySettings(save.data)
 
-  // Boot: the UI above is already on screen; three.js, Rapier (WASM) and the game load as a
+  // Boot: the UI above is already on screen; three.js and the game load as a
   // separate chunk behind the progress bar. Preload models/textures here too (engine/assets.ts).
   let loaded = 0
-  const track = <T>(p: Promise<T>): Promise<T> => p.then(v => (ui.setBootProgress(0.1 + (++loaded / 4) * 0.9), v))
+  const track = <T>(p: Promise<T>): Promise<T> => p.then(v => (ui.setBootProgress(0.1 + (++loaded / 3) * 0.9), v))
   ui.setBootProgress(0.1)
-  const [{ Game }, { Renderer, suggestQuality }, physics] = await Promise.all([
+  const [{ Game }, { Renderer, suggestQuality }] = await Promise.all([
     track(import('./game/game')),
     track(import('./engine/renderer')),
-    track(import('./engine/physics')),
     track(document.fonts.ready),
   ])
-  await physics.initPhysics()
   if (firstRun) {
     save.update({ quality: suggestQuality() })
     ui.refreshSettings()
@@ -88,15 +85,17 @@ async function boot(): Promise<void> {
 
   const renderer = new Renderer(canvas, save.data.quality)
   game = new Game(renderer, input, audio, {
+    t: (key, vars) => i18n.t(key, vars),
     popup: (text, at, kind) => ui.popup(text, at, kind),
-    hurt: () => ui.hurt(),
+    banner: (key, tone) => ui.banner(key, tone),
+    eggLost: () => ui.hurt(),
     hint: hint => ui.hint(hint),
     tutorialDone: () => save.update({ tutorialDone: true }),
     end: run => {
       input.unlockPointer()
       window.setTimeout(() => ui.showResults(run), run.phase === 'won' ? 1400 : 900)
     },
-  })
+  }, save.data.quality)
   game.reducedMotion = save.data.reducedMotion
   if (import.meta.env.DEV) {
     const [{ registerGameTuning }, { tuning }] = await Promise.all([
@@ -117,7 +116,7 @@ async function boot(): Promise<void> {
       ui.frame(frameSeconds)
       loop.paused = g.mode === 'paused'
       g.render(alpha, frameSeconds)
-      if (g.mode === 'playing' || g.mode === 'ended') ui.updateHud(g.run, g.compass())
+      if (g.mode === 'playing' || g.mode === 'ended') ui.updateHud(g.run, g.hud())
     },
   })
   loop.start()
