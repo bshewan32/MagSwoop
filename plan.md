@@ -24,8 +24,19 @@ Add an in-game audio system for **simulated magpie calls/song-like vocalizations
 
 ## Project approach
 
-Continue the already initialized Three.js game project; do not create a second project. Keep the work in the selected `bshewan32/MagSwoop` repository. Preserve the saved model-production choice and any applicable asset restrictions. The pending setup choice must be resolved before implementing the game itself.
+Continue the already initialized Three.js game project; do not create a second project. Keep the work in the selected `bshewan32/MagSwoop` repository. Preserve the saved model-production choice and any applicable asset restrictions. The setup model choice was resolved with the recommended option. Models are procedural low-poly meshes built in code.
 
 ## Explicitly deferred
 
 Authentication, online leaderboards, multiplayer, and persistent online services are out of scope for now. No server or database is needed for this version.
+
+## Implementation status (first playable)
+- [x] 3D flight with flap, boost and auto-targeted homing swoop, plus stamina and perching
+- [x] Procedural runners and cyclists on a bike loop and gravel paths. They startle, flee, and walk into the nest ring as intruders
+- [x] Scoring for scares and hits, combos, nest-defence bonus, three eggs, a 2:30 season, stars, and local high scores
+- [x] Three switchable magpies: Pied (white-backed), Scruffy (mottled juvenile) and Blackback (mostly black), with different handling
+- [x] Synthesised magpie carols, alarm calls and chortles, with a separate voice for each bird
+- [x] Swoop whoosh, wind, wing flaps, bill clacks, bike bells, yelps and park ambience
+- [x] Separate volume buses for Magpie calls, Effects and Ambience, plus Mute. Audio unlocks on the first interaction
+- [x] Keyboard/mouse, gamepad and touch controls, with pause, settings and results screens
+- [x] Unit tests and a headless smoke playthrough
