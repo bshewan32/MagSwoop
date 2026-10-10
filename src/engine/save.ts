@@ -7,6 +7,8 @@ export type Locale = 'en'
 export type Quality = 'low' | 'medium' | 'high'
 
 export type ScoreEntry = { name: string; score: number; seconds: number; at: number }
+export type SavedLocation = 'park' | 'beach'
+export type SavedMode = 'classic' | 'endless'
 
 export type SaveData = {
   version: 1
@@ -25,6 +27,11 @@ export type SaveData = {
   tutorialDone: boolean
   playerName: string
   leaderboard: ScoreEntry[]
+  /** Equipped skin id per flock bird (pied, mottled, black); null = natural plumage. */
+  skins: (string | null)[]
+  /** Last chosen location and mode (Season+ options fall back if not owned). */
+  location: SavedLocation
+  mode: SavedMode
 }
 
 export const SAVE_KEY = 'magswoop.save'
@@ -45,6 +52,9 @@ export function defaultSave(): SaveData {
     tutorialDone: false,
     playerName: 'PLAYER',
     leaderboard: [],
+    skins: [null, null, null],
+    location: 'park',
+    mode: 'classic',
   }
 }
 
@@ -81,6 +91,33 @@ export function parseSave(raw: string | null): SaveData {
       .filter((e): e is ScoreEntry => !!e && typeof e === 'object' && typeof (e as ScoreEntry).name === 'string' && Number.isFinite((e as ScoreEntry).score))
       .map(e => ({ name: e.name.slice(0, 16), score: Math.max(0, Math.floor(e.score)), seconds: Number.isFinite(e.seconds) ? e.seconds : 0, at: Number.isFinite(e.at) ? e.at : 0 }))
       .slice(0, LEADERBOARD_SIZE),
+    skins: [0, 1, 2].map(i => {
+      const v = Array.isArray(data.skins) ? data.skins[i] : null
+      return typeof v === 'string' && /^skin_[a-z]+$/.test(v) ? v : null
+    }),
+    location: data.location === 'beach' ? 'beach' : 'park',
+    mode: data.mode === 'endless' ? 'endless' : 'classic',
+  }
+}
+
+/**
+ * Merge a cloud save into the local one after login: the cloud copy wins for settings and
+ * equipped skins, local high scores are kept alongside cloud ones, and a finished tutorial stays
+ * finished. Untrusted cloud JSON goes through parseSave like local storage does.
+ */
+export function mergeSave(local: SaveData, cloud: unknown): SaveData {
+  const remote = parseSave(JSON.stringify({ ...(cloud && typeof cloud === 'object' ? cloud : {}), version: 1 }))
+  let board = remote.leaderboard
+  for (const e of local.leaderboard) {
+    if (!board.some(b => b.score === e.score && b.at === e.at && b.name === e.name)) board = insertScore(board, e).board
+  }
+  return {
+    ...local,
+    ...remote,
+    quality: local.quality,
+    locale: local.locale,
+    tutorialDone: local.tutorialDone || remote.tutorialDone,
+    leaderboard: board,
   }
 }
 
@@ -92,6 +129,8 @@ export function insertScore(board: ScoreEntry[], entry: ScoreEntry): { board: Sc
 
 export class SaveStore {
   data: SaveData
+  /** Called after every update (cloud sync hooks in here). */
+  onUpdate: ((data: SaveData) => void) | null = null
 
   constructor(private readonly storage: Pick<Storage, 'getItem' | 'setItem'> | undefined = globalThis.localStorage) {
     let raw: string | null = null
@@ -110,5 +149,6 @@ export class SaveStore {
     } catch {
       // Private browsing or quota: the game keeps working with in-memory settings.
     }
+    this.onUpdate?.(this.data)
   }
 }

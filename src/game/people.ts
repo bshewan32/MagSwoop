@@ -1,9 +1,17 @@
 import * as THREE from 'three'
 import { CONFIG } from './config'
-import { PARK, ROUTES, rng, type PersonKind, type Route } from './park'
+import { PARK, ROUTES, WHEELED, rng, type PersonKind, type Route } from './park'
+
+const BOARDS = ['#ffffff', '#ffd400', '#ff6a3d', '#3fd0ff', '#9be15d', '#ff4f8b']
+const SPEED: Record<PersonKind, () => number> = {
+  runner: () => CONFIG.people.runnerSpeed,
+  cyclist: () => CONFIG.people.cyclistSpeed,
+  surfer: () => CONFIG.people.surferSpeed,
+  scooter: () => CONFIG.people.scooterSpeed,
+}
 
 /**
- * Runners and cyclists: procedural low-poly rigs, path following on the park routes, and the
+ * Runners, cyclists, surfers and e-scooter riders: procedural low-poly rigs, path following on the park routes, and the
  * classic swooping-season reactions — duck, arms over the head, wobble, then flee the park.
  */
 export type PersonState = 'travel' | 'flee' | 'gone'
@@ -80,6 +88,7 @@ class Rig {
   arms!: [Limb, Limb]
   legs!: [Limb, Limb]
   readonly wheels: THREE.Object3D[] = []
+  board: THREE.Object3D | null = null
   /** Height of the head centre above the ground (what a magpie aims at). */
   headY = 1.62
 
@@ -96,9 +105,33 @@ class Rig {
     this.head.add(ball(0.14, skin, 0.08))
     this.hips.add(box(0.38, 0.2, 0.25, bottom, -0.02))
     this.arms = [-1, 1].map(side => limb(this.torso, side * 0.26, 0.55, 0.3, 0.28, 0.09, side < 0 ? shirt : shirt, skin)) as [Limb, Limb]
-    this.legs = [-1, 1].map(side => limb(this.hips, side * 0.11, -0.06, 0.45, 0.45, 0.13, kind === 'runner' && random() < 0.5 ? skin : bottom, skin, pick(['#fafafa', '#ff5a1f', '#222', '#3fd0ff']))) as [Limb, Limb]
+    const bareLegs = (kind === 'runner' || kind === 'surfer') && random() < 0.5
+    this.legs = [-1, 1].map(side => limb(this.hips, side * 0.11, -0.06, 0.45, 0.45, 0.13, bareLegs ? skin : bottom, skin, kind === 'surfer' ? skin : pick(['#fafafa', '#ff5a1f', '#222', '#3fd0ff']))) as [Limb, Limb]
 
-    if (kind === 'runner') {
+    if (kind === 'surfer') {
+      this.hips.position.y = 0.96
+      const hair = ball(0.15, pick(['#d9b86a', '#e8cf8a', '#5a3a22', '#2b1d14']), 0.13, 0.02)
+      hair.scale.set(1.08, 0.75, 1.12)
+      this.head.add(hair)
+      // Surfboard carried under the left arm, nose forward.
+      const board = new THREE.Mesh(new THREE.CapsuleGeometry(0.2, 1.5, 3, 8), mat(pick(BOARDS)))
+      board.scale.set(1, 1, 0.22)
+      board.rotation.set(Math.PI / 2, 0, Math.PI / 2)
+      board.position.set(-0.36, 0.25, -0.1)
+      board.rotation.set(Math.PI / 2 - 0.15, 0, 0)
+      board.castShadow = true
+      const stripe = box(0.05, 1.7, 0.06, '#1b1b1b')
+      board.add(stripe)
+      this.torso.add(board)
+      this.board = board
+    } else if (kind === 'scooter') {
+      this.headY = 1.92
+      this.buildScooter(random)
+      const helmet = ball(0.165, pick(HELMETS), 0.13)
+      helmet.scale.set(1, 0.8, 1.1)
+      if (random() < 0.6) this.head.add(helmet)
+      else this.head.add(ball(0.15, pick(HAIR), 0.13, 0.02))
+    } else if (kind === 'runner') {
       this.hips.position.y = 0.96
       if (random() < 0.45) {
         // Cap, sometimes with the anti-magpie eyes drawn on the back.
@@ -174,12 +207,48 @@ class Rig {
     this.torso.rotation.x = -0.75
   }
 
+  private buildScooter(random: () => number): void {
+    const color = ['#1b1b1b', '#e8e8e8', '#00b2a9', '#ff6a1f'][Math.floor(random() * 4)]
+    const scooter = new THREE.Group()
+    const V = (y: number, z: number) => new THREE.Vector3(0, y, z)
+    const deck = box(0.18, 0.06, 0.95, color, 0.16, 0.05)
+    scooter.add(deck)
+    scooter.add(rod(V(0.18, -0.42), V(1.12, -0.5), 0.025, '#9aa0a8'))
+    scooter.add(rod(new THREE.Vector3(-0.24, 1.12, -0.5), new THREE.Vector3(0.24, 1.12, -0.5), 0.018, '#222'))
+    for (const z of [-0.45, 0.48]) {
+      const wheel = new THREE.Group()
+      wheel.position.set(0, 0.1, z)
+      const tyre = new THREE.Mesh(new THREE.TorusGeometry(0.09, 0.03, 6, 12), mat('#1a1a1a'))
+      tyre.rotation.y = Math.PI / 2
+      wheel.add(tyre)
+      scooter.add(wheel)
+      this.wheels.push(wheel)
+    }
+    this.root.add(scooter)
+    // Standing on the deck, one foot forward.
+    this.hips.position.set(0, 1.12, 0.05)
+    this.torso.rotation.x = -0.12
+  }
+
   /** Animate one frame. `cycle` is the gait/crank phase, `panic` 0..1 arms-over-head. */
   pose(cycle: number, speed: number, panic: number, duck: number, wobble: number, time: number): void {
     const [armL, armR] = this.arms
     const [legL, legR] = this.legs
-    if (this.kind === 'runner') {
-      const swing = Math.sin(cycle)
+    if (this.kind === 'scooter') {
+      this.hips.position.y = 1.12 - duck * 0.14
+      this.torso.rotation.x = -0.12 - duck * 0.5
+      legL.upper.rotation.x = -0.18
+      legL.lower.rotation.x = 0.1 - duck * 0.4
+      legR.upper.rotation.x = 0.22
+      legR.lower.rotation.x = -0.1 - duck * 0.4
+      armL.upper.rotation.set(1.25, 0, -0.1)
+      armL.lower.rotation.x = 0.2
+      armR.upper.rotation.set(THREE.MathUtils.lerp(1.25, 2.9 + Math.sin(time * 16) * 0.3, panic), 0, THREE.MathUtils.lerp(0.1, 0.4, panic))
+      armR.lower.rotation.x = THREE.MathUtils.lerp(0.2, 0.6, panic)
+      this.root.rotation.z = wobble
+      for (const w of this.wheels) w.rotation.x -= speed * 0.12
+    } else if (this.kind === 'runner' || this.kind === 'surfer') {
+      const swing = Math.sin(cycle) * (this.kind === 'surfer' ? 0.6 : 1)
       this.hips.position.y = 0.96 + Math.abs(Math.cos(cycle)) * 0.05 * Math.min(1, speed / 3) - duck * 0.12
       this.torso.rotation.x = -0.12 - duck * 0.45
       legL.upper.rotation.x = swing * 0.8
@@ -190,6 +259,11 @@ class Rig {
       armL.upper.rotation.set(THREE.MathUtils.lerp(-swing * 0.65, 2.75 + flail, panic), 0, THREE.MathUtils.lerp(-0.08, -0.45, panic))
       armR.upper.rotation.set(THREE.MathUtils.lerp(swing * 0.65, 2.75 - flail, panic), 0, THREE.MathUtils.lerp(0.08, 0.45, panic))
       armL.lower.rotation.x = armR.lower.rotation.x = THREE.MathUtils.lerp(1.3, 0.9, panic)
+      if (this.board) {
+        armL.upper.rotation.set(THREE.MathUtils.lerp(0.25, 2.75, panic * 0.4), 0, -0.35)
+        armL.lower.rotation.x = 1.2
+        this.board.rotation.z = panic * 0.5
+      }
     } else {
       // Pedal: feet follow the crank circle, legs solved with IK from the hip on the saddle.
       for (const [i, leg] of [legL, legR].entries()) {
@@ -242,7 +316,7 @@ export class Person {
 
   constructor(readonly kind: PersonKind, readonly route: Route, readonly dir: 1 | -1, s: number, random: () => number) {
     this.rig = new Rig(kind, random)
-    const base = kind === 'cyclist' ? CONFIG.people.cyclistSpeed : CONFIG.people.runnerSpeed
+    const base = SPEED[kind]()
     this.speed = base * (0.85 + random() * 0.3)
     this.s = s
     this.place()
@@ -259,7 +333,7 @@ export class Person {
     const tx = p.tx * this.dir
     const tz = p.tz * this.dir
     // Keep left (it's Australia): cyclists near the centre line, runners at the edge.
-    const lane = this.kind === 'cyclist' ? 0.6 : Math.min(1.3, this.route.def.width / 2 - 0.3)
+    const lane = WHEELED.includes(this.kind) ? 0.6 : Math.min(1.3, this.route.def.width / 2 - 0.3)
     // Left of the travel direction (tx, tz) is (tz, -tx).
     this.pos.set(p.x + tz * lane, 0, p.z - tx * lane)
     this.heading = Math.atan2(-tx, -tz)
@@ -302,8 +376,8 @@ export class Person {
     this.panic += ((scared ? 1 : 0) - this.panic) * (1 - Math.exp(-(scared ? 12 : 3) * dt))
     this.duck += ((this.threat ? 1 : this.shock > 0.3 ? 0.6 : 0) - this.duck) * (1 - Math.exp(-10 * dt))
     this.shock = Math.max(0, this.shock - dt * 0.8)
-    this.wobble = this.kind === 'cyclist' ? Math.sin(this.time * 9) * 0.16 * Math.max(this.shock, this.threat ? 0.5 : 0) : 0
-    this.cycle += dt * (this.kind === 'cyclist' ? this.speed * 1.25 : this.speed * 2.3)
+    this.wobble = WHEELED.includes(this.kind) ? Math.sin(this.time * 9) * 0.16 * Math.max(this.shock, this.threat ? 0.5 : 0) : 0
+    this.cycle += dt * (WHEELED.includes(this.kind) ? this.speed * 1.25 : this.speed * (this.kind === 'surfer' ? 2.8 : 2.3))
     this.aim.set(this.pos.x, this.rig.headY + 0.15, this.pos.z)
   }
 
@@ -321,7 +395,13 @@ export class Crowd {
   private timer = 0
   private random = rng(4242)
 
-  constructor(private readonly scene: THREE.Scene) {}
+  constructor(private scene: THREE.Scene) {}
+
+  setScene(scene: THREE.Scene): void {
+    for (const p of this.people) this.scene.remove(p.rig.root)
+    this.scene = scene
+    for (const p of this.people) scene.add(p.rig.root)
+  }
 
   reset(seed: number): void {
     for (const p of this.people) this.remove(p)

@@ -4,21 +4,27 @@
  * clear of paths, nest-crossing routes really pass the nest).
  */
 export type Pt = { x: number; z: number }
-export type PersonKind = 'runner' | 'cyclist'
-export type Surface = 'asphalt' | 'gravel' | 'concrete'
+export type PersonKind = 'runner' | 'cyclist' | 'surfer' | 'scooter'
+export type Surface = 'asphalt' | 'gravel' | 'concrete' | 'boardwalk' | 'sand'
+export type LocationId = 'park' | 'beach'
 
-export const PARK = {
+/** Kinds that ride something with wheels (bells, wobble, faster). */
+export const WHEELED: readonly PersonKind[] = ['cyclist', 'scooter']
+
+export type ParkBounds = {
   /** Timber fence ring. People spawn outside it at `gate` and walk in through gaps. */
-  fence: 76,
-  gate: 86,
-  nest: { x: 0, z: 0 },
+  fence: number
+  gate: number
+  nest: Pt
   /** Height of the nest in the nest tree. */
-  nestHeight: 8.6,
-} as const
+  nestHeight: number
+}
 
 export type RouteDef = { id: string; kinds: PersonKind[]; surface: Surface; width: number; points: Pt[] }
 
-export const ROUTE_DEFS: RouteDef[] = [
+const BOUNDS: ParkBounds = { fence: 76, gate: 86, nest: { x: 0, z: 0 }, nestHeight: 8.6 }
+
+const PARK_ROUTES: RouteDef[] = [
   {
     id: 'bikeway', kinds: ['cyclist'], surface: 'asphalt', width: 3.2,
     points: [{ x: -90, z: 4 }, { x: -62, z: 6 }, { x: -36, z: 11 }, { x: -16, z: 10 }, { x: 0, z: 8.5 }, { x: 16, z: 6 }, { x: 36, z: -2 }, { x: 62, z: -8 }, { x: 90, z: -10 }],
@@ -36,6 +42,48 @@ export const ROUTE_DEFS: RouteDef[] = [
     points: [{ x: -66, z: 66 }, { x: -44, z: 44 }, { x: -20, z: 35 }, { x: 0, z: 33 }, { x: 24, z: 36 }, { x: 44, z: 44 }, { x: 66, z: 66 }],
   },
 ]
+
+/**
+ * Beach Esplanade (Season+): grassy foreshore reserve on the west, the esplanade shared path
+ * past the nest gum, sand from x = 22 and the surf from x = 52. Surfers walk from the car park
+ * across the reserve to the water; e-scooters share the esplanade and the bike lane.
+ */
+const BEACH_ROUTES: RouteDef[] = [
+  {
+    id: 'esplanade', kinds: ['runner', 'cyclist', 'scooter'], surface: 'concrete', width: 4,
+    points: [{ x: 16, z: -90 }, { x: 14, z: -62 }, { x: 9, z: -36 }, { x: 6, z: -12 }, { x: 6, z: 8 }, { x: 9, z: 30 }, { x: 14, z: 58 }, { x: 16, z: 90 }],
+  },
+  {
+    id: 'bikelane', kinds: ['cyclist', 'scooter'], surface: 'asphalt', width: 3.2,
+    points: [{ x: -30, z: -90 }, { x: -28, z: -50 }, { x: -24, z: -20 }, { x: -26, z: 10 }, { x: -30, z: 50 }, { x: -32, z: 90 }],
+  },
+  {
+    id: 'surfwalk', kinds: ['surfer'], surface: 'boardwalk', width: 2.4,
+    points: [{ x: -90, z: -30 }, { x: -56, z: -22 }, { x: -28, z: -10 }, { x: -8, z: -2 }, { x: 12, z: 8 }, { x: 28, z: 16 }, { x: 38, z: 30 }, { x: 40, z: 60 }, { x: 42, z: 92 }],
+  },
+  {
+    id: 'shoreline', kinds: ['runner', 'surfer'], surface: 'sand', width: 2.6,
+    points: [{ x: 32, z: -92 }, { x: 34, z: -50 }, { x: 30, z: -14 }, { x: 32, z: 20 }, { x: 36, z: 52 }, { x: 34, z: 92 }],
+  },
+]
+
+export type LocationDef = {
+  id: LocationId
+  nameKey: string
+  bounds: ParkBounds
+  routes: RouteDef[]
+  /** Where scenery trees may grow (beyond keeping clear of paths). */
+  treeAllowed(x: number, z: number): boolean
+  treeCount: number
+  /** Sand starts here (beach only) and the water beyond `water`. */
+  sandX?: number
+  waterX?: number
+}
+
+export const LOCATIONS: Record<LocationId, LocationDef> = {
+  park: { id: 'park', nameKey: 'location.park', bounds: BOUNDS, routes: PARK_ROUTES, treeAllowed: () => true, treeCount: 30 },
+  beach: { id: 'beach', nameKey: 'location.beach', bounds: BOUNDS, routes: BEACH_ROUTES, treeAllowed: x => x < 18, treeCount: 22, sandX: 22, waterX: 52 },
+}
 
 /** Mulberry32: tiny deterministic RNG so the park is identical on every load. */
 export function rng(seed: number): () => number {
@@ -141,7 +189,6 @@ export function segmentDistance(x: number, z: number, a: Pt, b: Pt): number {
   return Math.hypot(x - (a.x + dx * t), z - (a.z + dz * t))
 }
 
-export const ROUTES: Route[] = ROUTE_DEFS.map(def => new Route(def))
 
 /** Clearance from the nearest path edge (negative = on a path). */
 export function pathClearance(x: number, z: number): number {
@@ -153,7 +200,7 @@ export function pathClearance(x: number, z: number): number {
 export type TreeDef = { x: number; z: number; height: number; trunk: number; crown: number; lean: number; seed: number }
 
 /** Gum trees scattered across the park, clear of paths, the nest tree and each other. */
-export function planTrees(seed = 2024, count = 30): TreeDef[] {
+export function planTrees(seed = 2024, count = LOCATION.treeCount): TreeDef[] {
   const random = rng(seed)
   const out: TreeDef[] = []
   let guard = 0
@@ -163,7 +210,7 @@ export function planTrees(seed = 2024, count = 30): TreeDef[] {
     const r = 14 + Math.sqrt(random()) * 56
     const x = Math.cos(a) * r
     const z = Math.sin(a) * r
-    if (pathClearance(x, z) < 4.5) continue
+    if (pathClearance(x, z) < 4.5 || !LOCATION.treeAllowed(x, z)) continue
     if (out.some(t => Math.hypot(t.x - x, t.z - z) < 9)) continue
     const height = 7 + random() * 5
     out.push({ x, z, height, trunk: 0.32 + random() * 0.18, crown: 3 + random() * 1.6, lean: (random() - 0.5) * 0.25, seed: Math.floor(random() * 1e9) })
@@ -171,10 +218,8 @@ export function planTrees(seed = 2024, count = 30): TreeDef[] {
   return out
 }
 
-export const TREES = planTrees()
-
 /** The big gum at the centre holding the nest. */
-export const NEST_TREE: TreeDef = { x: PARK.nest.x, z: PARK.nest.z, height: 10.5, trunk: 0.62, crown: 4.4, lean: 0, seed: 77 }
+export const NEST_TREE: TreeDef = { x: BOUNDS.nest.x, z: BOUNDS.nest.z, height: 10.5, trunk: 0.62, crown: 4.4, lean: 0, seed: 77 }
 
 /** Branch tips where resting magpies perch (world space), each with a facing yaw. */
 export const PERCHES: { x: number; y: number; z: number; yaw: number }[] = [
@@ -193,6 +238,7 @@ export function planFurniture(seed = 99): Furniture[] {
     for (let s = 14; s < route.length - 14; s += 13 + random() * 9) {
       const p = route.sample(s)
       if (Math.hypot(p.x, p.z) > PARK.fence - 6) continue
+      if (LOCATION.waterX !== undefined && p.x > LOCATION.waterX - 6) continue
       const side = random() < 0.5 ? -1 : 1
       const nx = -p.tz * side
       const nz = p.tx * side
@@ -210,4 +256,34 @@ export function planFurniture(seed = 99): Furniture[] {
   return out
 }
 
-export const FURNITURE = planFurniture()
+
+// ─── active location ─────────────────────────────────────────────────────
+// Live ES-module bindings: modules importing these names see the current location after
+// setLocation(). Gameplay reads them every frame; scenery is built per location by World.
+export let LOCATION: LocationDef = LOCATIONS.park
+export let PARK: ParkBounds = LOCATION.bounds
+export let ROUTE_DEFS: RouteDef[] = LOCATION.routes
+export let ROUTES: Route[] = ROUTE_DEFS.map(def => new Route(def))
+export let TREES: TreeDef[] = planTrees()
+export let FURNITURE: Furniture[] = planFurniture()
+
+const cache = new Map<LocationId, { routes: Route[]; trees: TreeDef[]; furniture: Furniture[] }>()
+cache.set('park', { routes: ROUTES, trees: TREES, furniture: FURNITURE })
+
+export function setLocation(id: LocationId): LocationDef {
+  LOCATION = LOCATIONS[id]
+  PARK = LOCATION.bounds
+  ROUTE_DEFS = LOCATION.routes
+  let c = cache.get(id)
+  if (!c) {
+    ROUTES = ROUTE_DEFS.map(def => new Route(def))
+    c = { routes: ROUTES, trees: planTrees(), furniture: [] }
+    TREES = c.trees
+    c.furniture = planFurniture()
+    cache.set(id, c)
+  }
+  ROUTES = c.routes
+  TREES = c.trees
+  FURNITURE = c.furniture
+  return LOCATION
+}

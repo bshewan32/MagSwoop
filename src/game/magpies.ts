@@ -33,7 +33,7 @@ export type Variant = {
   paint: Plumage
 }
 
-type Plumage = {
+export type Plumage = {
   /** Unit-sphere coordinates: x lateral, y up, z back (front of the bird is -z). */
   body(x: number, y: number, z: number): THREE.Color
   head(x: number, y: number, z: number): THREE.Color
@@ -131,6 +131,63 @@ export const VARIANTS: Variant[] = [
   },
 ]
 
+/**
+ * Skins recolour a bird's own pattern (so a skinned juvenile still looks mottled and a skinned
+ * black-back keeps its nape band) and may add a crest. Handling and voice never change.
+ */
+export type SkinId = 'skin_albino' | 'skin_golden' | 'skin_night' | 'skin_crested' | 'skin_aurora' | 'skin_sunset' | 'skin_frost'
+export type Skin = {
+  id: SkinId
+  nameKey: string
+  dark: string
+  sheen: string
+  light: string
+  beak: string
+  eye: string
+  /** Eye glow (emissive intensity). */
+  glow?: number
+  crest?: string
+  /** Swatch for UI cards: [main, accent]. */
+  swatch: [string, string]
+}
+
+export const SKINS: Skin[] = [
+  { id: 'skin_albino', nameKey: 'skin.albino', dark: '#e4ddd2', sheen: '#f2ebe0', light: '#ffffff', beak: '#efc2b4', eye: '#d0414b', glow: 0.4, swatch: ['#ffffff', '#e4ddd2'] },
+  { id: 'skin_golden', nameKey: 'skin.golden', dark: '#1a1408', sheen: '#4a3508', light: '#f2b318', beak: '#ffd35c', eye: '#6b1d0a', swatch: ['#f2b318', '#1a1408'] },
+  { id: 'skin_night', nameKey: 'skin.night', dark: '#0c1024', sheen: '#2a3478', light: '#7f8cff', beak: '#9aa3ff', eye: '#ff3b3b', glow: 1.6, swatch: ['#0c1024', '#7f8cff'] },
+  { id: 'skin_crested', nameKey: 'skin.crested', dark: '#141418', sheen: '#1d1f2b', light: '#f3f1ea', beak: '#dfe3e8', eye: '#9a2f17', crest: '#ffcf4a', swatch: ['#ffcf4a', '#141418'] },
+  { id: 'skin_aurora', nameKey: 'skin.aurora', dark: '#0d2a2a', sheen: '#1f6f62', light: '#9ff0d8', beak: '#c8fff0', eye: '#2ad1a3', glow: 0.9, swatch: ['#9ff0d8', '#0d2a2a'] },
+  { id: 'skin_sunset', nameKey: 'skin.sunset', dark: '#2a0f1c', sheen: '#7a2a3a', light: '#ff9a5a', beak: '#ffd0a0', eye: '#ffde59', glow: 0.7, swatch: ['#ff9a5a', '#2a0f1c'] },
+  { id: 'skin_frost', nameKey: 'skin.frost', dark: '#1e2c3a', sheen: '#56718a', light: '#dff4ff', beak: '#ffffff', eye: '#59c8ff', glow: 0.8, swatch: ['#dff4ff', '#1e2c3a'] },
+]
+
+export const skinById = (id: string | null | undefined): Skin | null => SKINS.find(s => s.id === id) ?? null
+
+/** Plumage with the variant's pattern but the skin's colours. */
+export function reskin(p: Plumage, skin: Skin): Plumage {
+  const dark = C(skin.dark)
+  const sheen = C(skin.sheen)
+  const light = C(skin.light)
+  const map = new Map<THREE.Color, THREE.Color>([
+    [INK, dark],
+    [SHEEN, sheen],
+    [WHITE, light],
+    [CREAM, light.clone().lerp(dark, 0.15)],
+    [JUV_DARK, dark.clone().lerp(light, 0.22)],
+    [JUV_MID, dark.clone().lerp(light, 0.5)],
+    [JUV_LIGHT, dark.clone().lerp(light, 0.82)],
+  ])
+  const m = (c: THREE.Color) => map.get(c) ?? c
+  return {
+    body: (x, y, z) => m(p.body(x, y, z)),
+    head: (x, y, z) => m(p.head(x, y, z)),
+    wing: (t, c) => m(p.wing(t, c)),
+    tail: (t, u) => m(p.tail(t, u)),
+    beak: skin.beak,
+    eye: skin.eye,
+  }
+}
+
 /** Write a per-vertex colour attribute from a function of the vertex position. */
 function paint(geometry: THREE.BufferGeometry, fn: (x: number, y: number, z: number) => THREE.Color): THREE.BufferGeometry {
   const g = geometry.index ? geometry.toNonIndexed() : geometry
@@ -193,8 +250,8 @@ export class MagpieModel {
   private readonly legs = new THREE.Group()
   private readonly wings: [Wing, Wing]
 
-  constructor(readonly variant: Variant, scale = 0.75) {
-    const p = variant.paint
+  constructor(readonly variant: Variant, scale = 0.75, readonly skin: Skin | null = null) {
+    const p = skin ? reskin(variant.paint, skin) : variant.paint
     this.root.add(this.body)
     this.body.scale.setScalar(scale)
     const mesh = (g: THREE.BufferGeometry, mat: THREE.Material = MATERIAL) => {
@@ -219,13 +276,24 @@ export class MagpieModel {
     beakGeo.translate(0, -0.03, -0.32)
     const beakColor = C(p.beak)
     this.head.add(mesh(paint(beakGeo, (_x, _y, z) => (z < -0.4 ? INK : beakColor))))
-    const eyeMat = new THREE.MeshStandardMaterial({ color: p.eye, roughness: 0.2, emissive: p.eye, emissiveIntensity: 0.25 })
+    const eyeMat = new THREE.MeshStandardMaterial({ color: p.eye, roughness: 0.2, emissive: p.eye, emissiveIntensity: skin?.glow ?? 0.25 })
     for (const side of [-1, 1]) {
       const eye = new THREE.Mesh(new THREE.SphereGeometry(0.038, 8, 6), eyeMat)
       eye.position.set(side * 0.15, 0.04, -0.1)
       this.head.add(eye)
     }
 
+    if (skin?.crest) {
+      // A swept-back crest of three feathers on the crown.
+      const crestMat = new THREE.MeshStandardMaterial({ color: skin.crest, flatShading: true, roughness: 0.4, emissive: skin.crest, emissiveIntensity: 0.15 })
+      for (let i = 0; i < 3; i += 1) {
+        const f = new THREE.Mesh(new THREE.ConeGeometry(0.045, 0.3 - i * 0.05, 4), crestMat)
+        f.position.set((i - 1) * 0.05, 0.2, 0.02 + i * 0.03)
+        f.rotation.set(0.9 + i * 0.12, 0, (i - 1) * -0.25)
+        f.castShadow = true
+        this.head.add(f)
+      }
+    }
     this.tail.position.set(0, 0.04, 0.5)
     this.body.add(this.tail)
     const tailGeo = new THREE.BoxGeometry(1, 0.03, 1, 4, 1, 6)
@@ -266,6 +334,15 @@ export class MagpieModel {
     }
     this.wings = [makeWing(1), makeWing(-1)]
     this.setPose({ phase: 0, flap: 0, tuck: 0, fold: 1, headTurn: 0, tailBob: 0 })
+  }
+
+  dispose(): void {
+    this.root.traverse(o => {
+      if (o instanceof THREE.Mesh) {
+        o.geometry.dispose()
+        if (o.material !== MATERIAL) (o.material as THREE.Material).dispose()
+      }
+    })
   }
 
   setPose(p: MagpiePose): void {
