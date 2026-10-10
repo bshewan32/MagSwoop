@@ -50,6 +50,25 @@ pnpm smoke    # after build: headless playthrough (fly, swoop, carol, switch, me
 - There are three volume buses: **Magpie calls**, **Effects** and **Ambience**. You can also mute
   everything in Settings.
 
+## Online, shop and payments
+
+The game is free and fully playable without an account. Logging in with Manus (top-right chip) unlocks buying, cloud saves and online scores.
+
+| Product | Price (AUD) | What it gives |
+|---|---|---|
+| Plumage Pack | A$2.99 once | Albino, Golden Wattle and Night Raider skins for any bird |
+| Magpie Season+ | A$4.99 once | Beach Esplanade map (surfers, e-scooter riders) and Endless mode with its own board |
+| 500 Feathers | A$1.99 each | Soft currency: single skins (250) and bonus eggs (120) |
+| Swoop Club | A$2.99 / month | Double feathers per posted run, Crested skin, a monthly skin, member badge |
+
+- **Payments**: Stripe Checkout (currently **test mode**: card 4242 4242 4242 4242). Items unlock only from the signed Stripe webhook (`/api/stripe/webhook`), never from the return URL. Members can cancel/resume in Account, or open the Stripe billing portal.
+- **Backend** (`server/`): Express + tRPC on the Manus server, MySQL. `server/shop/products.mjs` is the single catalogue; `store.mjs` keeps provider-neutral entitlements (`source` = stripe / steam / grant), wallet + ledger, orders, subscriptions; `stripe.mjs` is the only Stripe-specific module, so a Steam adapter can be added beside it later.
+- **Cloud save**: settings, equipped skins, local high scores and setup follow the account (`game.save.*`).
+- **Leaderboards**: Classic (`season-v1`) and Endless (`endless-v1`), all-time and weekly, with club badges. Posted runs earn feathers.
+- **Migrations**: `cd server && npm run db:migrate && npm run db:migrate:leaderboard` (finite step; never run at start-up).
+- **E2E payment check**: `cd server && node e2e-checkout.mjs skins_pack` (creates a throwaway user, pays with the test card in real Checkout, waits for the webhook, cleans up).
+- **Going live**: claim the Stripe sandbox, complete Stripe verification, then add live keys in Settings → Payment. Test with a real card at A$0.50+ before launch.
+
 ## Layout
 
 | Path | Role |
