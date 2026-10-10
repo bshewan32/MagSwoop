@@ -40,3 +40,11 @@ Authentication, online leaderboards, multiplayer, and persistent online services
 - [x] Separate volume buses for Magpie calls, Effects and Ambience, plus Mute. Audio unlocks on the first interaction
 - [x] Keyboard/mouse, gamepad and touch controls, with pause, settings and results screens
 - [x] Unit tests and a headless smoke playthrough
+
+## Update: shop, payments and backend (2026-10-10)
+
+- Manus login (optional: only needed to buy, sync saves and post online scores).
+- Stripe Checkout in test mode: Plumage Pack A$2.99, Magpie Season+ A$4.99, 500 Feathers A$1.99, Swoop Club A$2.99/month. Fulfilment only from the signed webhook; verified end-to-end with the test card for a one-off purchase and a subscription.
+- Backend: entitlements/wallet/orders/subscriptions (provider-neutral for a later Steam move), cloud saves, Classic + Endless leaderboards (all-time and weekly), purchase history and membership management.
+- Season+ content: Beach Esplanade map (surfers, e-scooter riders, Norfolk pines, surf club) and Endless mode with egg restocks.
+- Steam later: add a Steam adapter beside `server/shop/stripe.mjs` (Steam microtransactions are required on Steam) and keep the entitlements table.
