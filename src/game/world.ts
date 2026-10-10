@@ -2,7 +2,7 @@ import * as THREE from 'three'
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js'
 import { CONFIG } from './config'
 import type { Obstacles } from './bird'
-import { FURNITURE, NEST_TREE, PARK, PERCHES, ROUTES, TREES, pathClearance, rng, type TreeDef } from './park'
+import { FURNITURE, LOCATION, NEST_TREE, PARK, PERCHES, ROUTES, TREES, pathClearance, rng, type LocationDef, type TreeDef } from './park'
 
 /**
  * Procedural suburban park in spring swooping season. Static scenery is baked into a few merged
@@ -20,6 +20,12 @@ export const PALETTE = {
   asphalt: '#5a6069',
   gravel: '#c9a777',
   concrete: '#bdb6aa',
+  boardwalk: '#a9825a',
+  sandPath: '#d6bf8e',
+  sand: '#ecd9a8',
+  wetSand: '#cdb487',
+  water: '#2b8db3',
+  pine: ['#2f5d3a', '#356843', '#29523a'],
 }
 
 type Paint = string | ((x: number, y: number, z: number) => string)
@@ -88,8 +94,13 @@ export class World {
   private clouds: THREE.Object3D[] = []
   private alert = 0
   private time = 0
+  private water: THREE.Mesh | null = null
+  readonly location: LocationDef
+  private readonly beach: boolean
 
-  constructor(shadowMapSize: number, lowDetail = false) {
+  constructor(shadowMapSize: number, lowDetail = false, location: LocationDef = LOCATION) {
+    this.location = location
+    this.beach = location.id === 'beach'
     this.scene.background = PALETTE.horizon.clone()
     this.scene.fog = new THREE.Fog(PALETTE.horizon, 70, 240)
     this.scene.add(this.makeSky())
@@ -113,12 +124,19 @@ export class World {
     const trunks = new Batch()
     const leaves = new Batch()
     const random = rng(31)
-    for (const t of TREES) this.gumTree(t, trunks, leaves, random, true)
+    for (const [i, t] of TREES.entries()) {
+      if (this.beach && i % 2 === 0) this.norfolkPine(t, trunks, leaves, true)
+      else this.gumTree(t, trunks, leaves, random, true)
+    }
     this.nestTree(trunks, leaves)
     const outside = rng(57)
     for (let i = 0; i < (lowDetail ? 26 : 48); i += 1) {
       const a = outside() * Math.PI * 2
       const r = 92 + outside() * 50
+      if (this.beach && Math.cos(a) * r > -12) {
+        if (i % 3 === 0) this.norfolkPine({ x: -20 - outside() * 10, z: Math.sin(a) * r, height: 14, trunk: 0.4, crown: 3, lean: 0, seed: i }, trunks, leaves, false)
+        continue
+      }
       this.gumTree({ x: Math.cos(a) * r, z: Math.sin(a) * r, height: 8 + outside() * 6, trunk: 0.4, crown: 3.5 + outside() * 2, lean: 0, seed: i }, trunks, leaves, outside, false)
     }
     this.scene.add(trunks.build(solid))
@@ -128,7 +146,9 @@ export class World {
     this.fence(props)
     this.furniture(props)
     this.houses(props)
+    if (this.beach) this.beachProps(props)
     this.scene.add(props.build(solid))
+    if (this.beach) this.makeWater()
 
     this.scene.add(this.makeNest())
     this.ringMat = new THREE.MeshBasicMaterial({ color: '#fff7e0', transparent: true, opacity: 0.32, depthWrite: false })
@@ -165,6 +185,15 @@ export class World {
       const r = Math.hypot(x, z)
       const n = hash(Math.floor(x / 6), 0, Math.floor(z / 6))
       const n2 = Math.sin(x * 0.07) * Math.cos(z * 0.05) + Math.sin((x + z) * 0.031)
+      if (this.beach && x > (this.location.sandX ?? 0) + Math.sin(z * 0.08) * 2) {
+        // Sand slopes gently down into the surf; the sea floor stays flat to the horizon.
+        const wx = this.location.waterX ?? 52
+        const y = x < wx ? -((x - (this.location.sandX ?? 22)) / (wx - (this.location.sandX ?? 22))) * 0.35 : -0.35 - Math.min(1.2, (x - wx) * 0.05)
+        pos.setY(i, y)
+        c.set(x > wx - 5 ? PALETTE.wetSand : PALETTE.sand).offsetHSL(0, 0, (n - 0.5) * 0.04)
+        c.toArray(colors, i * 3)
+        continue
+      }
       if (r > 160) pos.setY(i, (r - 160) * 0.28 + Math.sin(x * 0.05) * Math.cos(z * 0.04) * 6)
       if (r < PARK.fence) c.set(n2 > 1.1 ? PALETTE.dryGrass : PALETTE.grass[Math.floor(n * 4)])
       else if (r < 80) c.set('#8fb35a')
@@ -204,14 +233,20 @@ export class World {
       mesh.receiveShadow = true
       group.add(mesh)
     }
-    // Suburban road ring outside the fence.
-    const road = new THREE.Mesh(new THREE.RingGeometry(80, 87, 160), new THREE.MeshStandardMaterial({ color: '#4b5059', roughness: 0.95, polygonOffset: true, polygonOffsetFactor: -1 }))
+    // Suburban road ring outside the fence (the beach has a straight coast road instead).
+    const road = new THREE.Mesh(this.beach ? new THREE.PlaneGeometry(8, 300) : new THREE.RingGeometry(80, 87, 160), new THREE.MeshStandardMaterial({ color: '#4b5059', roughness: 0.95, polygonOffset: true, polygonOffsetFactor: -1 }))
     road.rotation.x = -Math.PI / 2
     road.position.y = 0.02
+    if (this.beach) road.position.x = -44
     road.receiveShadow = true
     group.add(road)
     for (const route of ROUTES) {
-      const color = route.def.surface === 'asphalt' ? PALETTE.asphalt : route.def.surface === 'gravel' ? PALETTE.gravel : PALETTE.concrete
+      const sf = route.def.surface
+      const color = sf === 'asphalt' ? PALETTE.asphalt : sf === 'gravel' ? PALETTE.gravel : sf === 'boardwalk' ? PALETTE.boardwalk : sf === 'sand' ? PALETTE.sandPath : PALETTE.concrete
+      if (sf === 'sand') {
+        ribbon(route.pts, route.def.width, 0.02, color)
+        continue
+      }
       ribbon(route.pts, route.def.width + 0.5, 0.03, '#a59c80')
       ribbon(route.pts, route.def.width, 0.05, color)
       if (route.def.surface === 'asphalt') ribbon(route.pts, 0.14, 0.07, '#f2efe6', true)
@@ -278,6 +313,68 @@ export class World {
     this.canopy(t.x, h0 + 5, t.z, 3.2, leaves, random, true)
   }
 
+  /** Tall tiered Norfolk Island pine, the classic beachfront tree. */
+  private norfolkPine(t: TreeDef, trunks: Batch, leaves: Batch, collide: boolean): void {
+    const h = t.height * 1.35
+    trunks.add(new THREE.CylinderGeometry(t.trunk * 0.35, t.trunk, h, 6), '#6b5440', limbMatrix(new THREE.Vector3(t.x, 0, t.z), new THREE.Vector3(t.x, h, t.z)))
+    if (collide) this.obstacles.trunks.push({ x: t.x, z: t.z, r: t.trunk, top: h })
+    const tiers = 6
+    for (let i = 0; i < tiers; i += 1) {
+      const y = h * (0.35 + (i / tiers) * 0.62)
+      const r = t.crown * (1.05 - i / tiers * 0.8)
+      leaves.add(new THREE.ConeGeometry(r, 1.6, 7), PALETTE.pine[i % 3], trs(t.x, y, t.z, 0, i * 0.7, 0))
+      if (collide) this.obstacles.blobs.push({ x: t.x, y, z: t.z, r: r * 0.7 })
+    }
+  }
+
+  private beachProps(props: Batch): void {
+    // Surf life saving club on the sand, with the red-and-yellow patrol flags below it.
+    props.add(new THREE.BoxGeometry(7, 4.2, 12), '#efe6d2', trs(46, 2.1, -32))
+    props.add(new THREE.BoxGeometry(7.6, 0.4, 12.6), '#c8342b', trs(46, 4.4, -32))
+    props.add(new THREE.BoxGeometry(0.1, 1.6, 9), '#5b7a99', trs(42.45, 2.4, -32))
+    this.obstacles.trunks.push({ x: 46, z: -32, r: 6, top: 4.6 })
+    for (const z of [-6, 14]) {
+      props.add(new THREE.CylinderGeometry(0.05, 0.05, 3, 5), '#d9d9d9', trs(47, 1.4, z))
+      props.add(new THREE.BoxGeometry(0.04, 0.8, 1.2), '#e2231a', trs(47, 2.5, z + 0.6))
+      props.add(new THREE.BoxGeometry(0.04, 0.4, 1.2), '#ffd400', trs(47.01, 2.3, z + 0.6))
+    }
+    // Pastel beach huts along the top of the sand.
+    const huts = ['#ff8fa3', '#7fd1e8', '#ffd166', '#9be15d', '#c3a6ff', '#ffffff']
+    for (let i = 0; i < 6; i += 1) {
+      const z = 58 + i * 4.2
+      props.add(new THREE.BoxGeometry(3, 2.6, 3.2), huts[i], trs(25, 1.3, z))
+      const roof = new THREE.ConeGeometry(Math.SQRT1_2, 1, 4, 1)
+      roof.rotateY(Math.PI / 4)
+      props.add(roof, '#f4f1ea', trs(25, 3.1, z, 0, 0, 0, 3.4, 1.2, 3.6))
+      this.obstacles.trunks.push({ x: 25, z, r: 1.8, top: 3.6 })
+    }
+    // Umbrellas and towels dotted along the sand.
+    const random = rng(4040)
+    for (let i = 0; i < 14; i += 1) {
+      const x = 40 + random() * 9
+      const z = -70 + random() * 140
+      if (Math.abs(z + 32) < 9) continue
+      const col = huts[Math.floor(random() * huts.length)]
+      props.add(new THREE.CylinderGeometry(0.03, 0.03, 2.1, 4), '#eeeeee', trs(x, 0.9, z, 0.1, 0, 0.1))
+      props.add(new THREE.ConeGeometry(1.2, 0.5, 8), col, trs(x + 0.1, 2, z + 0.1))
+      props.add(new THREE.BoxGeometry(0.9, 0.02, 1.8), huts[(i + 2) % huts.length], trs(x + 1.4, 0.0, z, 0, random(), 0))
+    }
+  }
+
+  private makeWater(): void {
+    const g = new THREE.PlaneGeometry(380, 520, 48, 64)
+    g.rotateX(-Math.PI / 2)
+    const material = new THREE.MeshStandardMaterial({ color: PALETTE.water, roughness: 0.25, metalness: 0.1, transparent: true, opacity: 0.88, flatShading: true })
+    this.water = new THREE.Mesh(g, material)
+    this.water.position.set((this.location.waterX ?? 52) + 190, -0.12, 0)
+    this.water.receiveShadow = true
+    this.scene.add(this.water)
+    // A line of white surf just off the beach.
+    const foam = new THREE.Mesh(new THREE.PlaneGeometry(3, 520).rotateX(-Math.PI / 2), new THREE.MeshBasicMaterial({ color: '#ffffff', transparent: true, opacity: 0.55 }))
+    foam.position.set((this.location.waterX ?? 52) + 1.5, -0.08, 0)
+    this.scene.add(foam)
+  }
+
   private makeNest(): THREE.Group {
     const group = new THREE.Group()
     group.position.copy(this.nestPosition)
@@ -315,6 +412,7 @@ export class World {
     const step = 3 / R
     for (let a = 0; a < Math.PI * 2; a += step) {
       if (inGap(a)) continue
+      if (this.beach && Math.cos(a) * R > 18) continue
       const x = Math.cos(a) * R
       const z = Math.sin(a) * R
       props.add(new THREE.BoxGeometry(0.16, 1.1, 0.16), '#86664a', trs(x, 0.55, z, 0, -a))
@@ -363,6 +461,7 @@ export class World {
         const r = ring + random() * 5
         const x = Math.cos(a) * r
         const z = Math.sin(a) * r
+        if (this.beach && x > -50) continue
         const w = 9 + random() * 3
         const d = 8 + random() * 3
         const h = 2.8 + (random() < 0.2 ? 2.6 : 0)
@@ -389,6 +488,7 @@ export class World {
       const x = Math.cos(a) * r
       const z = Math.sin(a) * r
       if (pathClearance(x, z) < 0.4) continue
+      if (this.beach && x > (this.location.sandX ?? 22) - 2) continue
       const flower = random() < 0.18
       mesh.setMatrixAt(n, trs(x, flower ? 0.1 : 0.2, z, 0, random() * 3, 0, flower ? 1.2 : 1, flower ? 0.4 : 0.7 + random() * 0.8, flower ? 1.2 : 1))
       mesh.setColorAt(n, flower ? flowerColor : grassColor)
@@ -435,6 +535,12 @@ export class World {
     for (const c of this.clouds) {
       c.position.x += dt * 1.2
       if (c.position.x > 260) c.position.x = -260
+    }
+    if (this.water) {
+      const pos = this.water.geometry.attributes.position
+      for (let i = 0; i < pos.count; i += 1) pos.setY(i, Math.sin(pos.getX(i) * 0.15 + this.time * 1.4) * 0.12 + Math.cos(pos.getZ(i) * 0.1 + this.time) * 0.08)
+      pos.needsUpdate = true
+      this.water.geometry.computeVertexNormals()
     }
     const pulse = this.alert > 0 ? 0.45 + 0.35 * Math.sin(this.time * 8) : 0.3
     this.ringMat.opacity = pulse

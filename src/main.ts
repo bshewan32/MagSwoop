@@ -3,8 +3,11 @@ import { Audio } from './engine/audio'
 import { I18n } from './engine/i18n'
 import { Input } from './engine/input'
 import { GameLoop } from './engine/loop'
-import { SAVE_KEY, SaveStore, type SaveData } from './engine/save'
+import { SAVE_KEY, SaveStore, mergeSave, type SaveData } from './engine/save'
 import type { Game } from './game/game'
+import { SKINS, skinById } from './game/magpies'
+import type { RunState } from './game/rules'
+import { Online, type BoardId } from './online/online'
 import { TouchControls } from './ui/touch'
 import { Ui } from './ui/ui'
 
@@ -16,7 +19,10 @@ async function boot(): Promise<void> {
   const i18n = new I18n()
   const input = new Input(canvas)
   const audio = new Audio()
+  const online = new Online()
   let game: Game | undefined
+  let ticket: Promise<{ runId: string } | null> = Promise.resolve(null)
+  let runBoard: BoardId = 'season-v1'
   let lockLostAt = 0
 
   const applySettings = (d: SaveData) => {
@@ -26,14 +32,38 @@ async function boot(): Promise<void> {
     if (game) game.reducedMotion = d.reducedMotion
   }
 
-  const startRun = (tutorial: boolean) => {
+  /** Equip saved skins, but only ones this player currently owns (a lapsed club skin shows natural). */
+  const applySkins = () => game?.setSkins(save.data.skins.map(id => (id && online.owns(id) ? skinById(id) : null)))
+  const startRun = async (tutorial: boolean) => {
     if (!game) return
     audio.unlock()
+    const plus = online.seasonPlus
+    if (!plus && (save.data.mode !== 'classic' || save.data.location !== 'park')) {
+      // Season+ content is chosen but not owned: send the player to the shop instead.
+      ui.banner('setup.locked', 'bad')
+      ui.push('shop')
+      return
+    }
+    const mode = save.data.mode
+    runBoard = mode === 'endless' ? 'endless-v1' : 'season-v1'
+    const bonus = ui.wantsBonusEgg && !tutorial ? await online.useBonusEgg() : false
+    ui.wantsBonusEgg = false
     audio.startAmbience()
-    game.start(tutorial)
+    game.start({ tutorial, mode, location: save.data.location, bonusEggs: bonus ? 1 : 0 })
+    ticket = !tutorial && online.signedIn ? online.beginRun(runBoard) : Promise.resolve(null)
     ui.show('hud')
     loop.resetAccumulator()
     input.lockPointer()
+  }
+  const submitRun = async (run: RunState) => {
+    const t = await ticket
+    ticket = Promise.resolve(null)
+    if (!t || run.unranked || run.score <= 0) {
+      if (online.signedIn && !run.unranked) ui.onlineSubmitted(t ? { ok: true, feathers: 0 } : null)
+      return
+    }
+    const r = await online.submitRun(runBoard, t, run.score, Math.round(run.elapsed * 1000))
+    ui.onlineSubmitted(r)
   }
   const pause = () => {
     if (game?.mode !== 'playing') return
@@ -50,8 +80,8 @@ async function boot(): Promise<void> {
   }
 
   const ui = new Ui(i18n, save, audio, input, {
-    play: () => startRun(!save.data.tutorialDone),
-    restart: () => startRun(false),
+    play: () => void startRun(!save.data.tutorialDone),
+    restart: () => void startRun(false),
     resume,
     quit: () => {
       game?.toTitle()
@@ -64,6 +94,38 @@ async function boot(): Promise<void> {
       applySettings(save.data)
       if (qualityChanged) game?.setQuality(save.data.quality)
     },
+    skins: skins => {
+      save.update({ skins })
+      applySkins()
+    },
+  }, online)
+  save.onUpdate = data => online.pushSave(data)
+  // Session first (never assumed), then the cloud save and any Stripe Checkout return.
+  const onlineReady = online.prepare().then(async () => {
+    if (online.signedIn) {
+      const cloud = await online.pullSave()
+      if (cloud) {
+        save.update(mergeSave(save.data, cloud))
+        applySettings(save.data)
+        ui.refreshSettings()
+      } else online.pushSave(save.data)
+    }
+  }).catch(() => undefined)
+  let synced = online.signedIn
+  online.addEventListener('change', () => {
+    applySkins()
+    if (online.signedIn && !synced) {
+      synced = true
+      void online.pullSave().then(cloud => {
+        if (cloud) {
+          save.update(mergeSave(save.data, cloud))
+          applySettings(save.data)
+          ui.refreshSettings()
+          applySkins()
+        } else online.pushSave(save.data)
+      })
+    }
+    if (!online.signedIn) synced = false
   })
   ui.show('boot')
   applySettings(save.data)
@@ -93,7 +155,10 @@ async function boot(): Promise<void> {
     tutorialDone: () => save.update({ tutorialDone: true }),
     end: run => {
       input.unlockPointer()
-      window.setTimeout(() => ui.showResults(run), run.phase === 'won' ? 1400 : 900)
+      window.setTimeout(() => {
+        ui.showResults(run)
+        void submitRun(run)
+      }, run.phase === 'won' || run.mode === 'endless' ? 1400 : 900)
     },
   }, save.data.quality)
   game.reducedMotion = save.data.reducedMotion
@@ -137,9 +202,26 @@ async function boot(): Promise<void> {
   })
   new TouchControls(document.getElementById('ui')!, input, () => g.mode === 'playing')
 
-  window.setTimeout(() => ui.show('title'), 250)
+  applySkins()
+  window.setTimeout(() => {
+    ui.show('title')
+    void onlineReady.then(async () => {
+      synced = online.signedIn
+      applySkins()
+      const ret = online.takeCheckoutReturn()
+      if (!ret) return
+      if (ret.kind === 'cancel') {
+        ui.checkoutReturned('cancel')
+        return
+      }
+      ui.checkoutReturned('waiting')
+      const status = ret.sessionId && online.signedIn ? await online.awaitOrder(ret.sessionId) : 'processing'
+      ui.checkoutReturned(status)
+      applySkins()
+    })
+  }, 250)
   // Debug/test hook (read-only use): smoke tests inspect run state through it.
-  ;(window as unknown as { __game: unknown }).__game = { game: g, ui, input, save }
+  ;(window as unknown as { __game: unknown }).__game = { game: g, ui, input, save, online, skins: SKINS }
 }
 
 function safeGet(key: string): string | null {

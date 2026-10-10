@@ -138,6 +138,73 @@ try {
   await page.screenshot({ path: `${out}/07-results.png` })
   const done = await state(page)
   if (done.run.phase !== 'won') throw new Error(`expected a won season, got ${done.run.phase}`)
+
+  // Store screens (logged out: catalog visible, buying gated behind login).
+  await page.evaluate(() => {
+    const { game, ui } = window.__game
+    game.toTitle()
+    ui.show('title')
+  })
+  await page.waitForTimeout(500)
+  await page.click('[data-screen="title"] [data-action="shop"]')
+  await page.waitForSelector('[data-screen="shop"].is-active')
+  await page.waitForSelector('.product', { timeout: 10_000 })
+  await page.waitForTimeout(500)
+  const products = await page.locator('.product').count()
+  if (products < 4) throw new Error(`expected 4 shop products, got ${products}`)
+  await page.screenshot({ path: `${out}/09-shop.png` })
+  await page.click('[data-screen="shop"] [data-action="wardrobe"]')
+  await page.waitForSelector('[data-screen="wardrobe"].is-active')
+  await page.waitForTimeout(400)
+  if ((await page.locator('.skin-opt').count()) < 3 * 8) throw new Error('wardrobe options missing')
+  await page.screenshot({ path: `${out}/10-wardrobe.png` })
+  await page.evaluate(() => window.__game.ui.show('leaderboard'))
+  await page.click('[data-action="board-tab"][data-tab="season-v1"]')
+  await page.waitForTimeout(800)
+  await page.screenshot({ path: `${out}/11-online-board.png` })
+
+  // Season+ content: Beach Esplanade in Endless mode with a skin equipped (driven directly, bypassing purchase).
+  await page.evaluate(() => {
+    const { game, ui } = window.__game
+    ui.show('title')
+    game.start({ tutorial: false, mode: 'endless', location: 'beach', bonusEggs: 1 })
+    ui.show('hud')
+  })
+  await page.waitForTimeout(500)
+  await page.evaluate(async () => {
+    const { game, skins } = window.__game
+    game.setSkins([skins[1], skins[2], skins[0]])
+    for (let i = 0; i < 60 * 12; i += 1) game.step(1 / 60)
+  })
+  await page.waitForTimeout(1500)
+  const beach = await page.evaluate(() => {
+    const { game } = window.__game
+    return { loc: game.location, mode: game.run.mode, endless: game.run.timeLeft === Infinity, eggs: game.run.eggs, kinds: [...new Set(game.crowd.people.map(p => p.kind))], phase: game.run.phase }
+  })
+  if (beach.loc !== 'beach' || beach.mode !== 'endless' || !beach.endless) throw new Error(`beach endless did not start: ${JSON.stringify(beach)}`)
+  if (beach.eggs < 4 && beach.phase === 'playing') console.log('smoke: (bonus egg already lost)')
+  if (!beach.kinds.some(k => k === 'surfer' || k === 'scooter')) throw new Error(`no surfers or scooters at the beach: ${beach.kinds}`)
+  console.log(`smoke: beach endless OK, kinds ${beach.kinds.join(',')}, eggs ${beach.eggs}`)
+  await page.evaluate(() => {
+    const { game } = window.__game
+    const p = game.crowd.people.find(q => q.alive && (q.kind === 'surfer' || q.kind === 'scooter')) ?? game.crowd.people[0]
+    const b = game.bird
+    b.pos.set(p.aim.x + 6, p.aim.y + 3, p.aim.z + 6)
+    b.yaw = Math.atan2(-(p.aim.x - b.pos.x), -(p.aim.z - b.pos.z))
+    b.pitch = -0.25
+    b.prev.copy(b.pos)
+  })
+  await page.waitForTimeout(700)
+  await page.screenshot({ path: `${out}/12-beach.png` })
+  await page.evaluate(() => {
+    const b = window.__game.game.bird
+    b.pos.set(-6, 9, 4)
+    b.yaw = -Math.PI / 2 - 0.35
+    b.pitch = -0.12
+    b.prev.copy(b.pos)
+  })
+  await page.waitForTimeout(500)
+  await page.screenshot({ path: `${out}/13-beach-sea.png` })
   await en.close()
 
   const phone = await browser.newContext({ viewport: { width: 844, height: 390 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true, locale: 'en-AU' })

@@ -1,6 +1,6 @@
 import * as THREE from 'three'
 import { CONFIG } from './config'
-import { MagpieModel, type Variant } from './magpies'
+import { MagpieModel, type Skin, type Variant } from './magpies'
 
 /**
  * One magpie: arcade flight for the bird you control, and a simple autopilot that flies the
@@ -55,7 +55,7 @@ export function angleDelta(a: number, b: number): number {
 }
 
 export class Bird {
-  readonly model: MagpieModel
+  model: MagpieModel
   readonly pos = new THREE.Vector3()
   readonly prev = new THREE.Vector3()
   yaw = 0
@@ -311,6 +311,20 @@ export class Bird {
     this.tuck += ((this.mode === 'swoop' ? 1 : 0) - this.tuck) * (1 - Math.exp(-8 * dt))
     this.fold += ((perched ? 1 : 0) - this.fold) * (1 - Math.exp(-10 * dt))
     this.idle += dt
+  }
+
+  /** Swap to a new skin (null = natural plumage), keeping the model's place in the scene. */
+  setSkin(skin: Skin | null): void {
+    if ((this.model.skin?.id ?? null) === (skin?.id ?? null)) return
+    const old = this.model
+    const next = new MagpieModel(this.variant, 0.75, skin)
+    next.root.position.copy(old.root.position)
+    next.root.quaternion.copy(old.root.quaternion)
+    next.body.rotation.copy(old.body.rotation)
+    old.root.parent?.add(next.root)
+    old.root.removeFromParent()
+    old.dispose()
+    this.model = next
   }
 
   /** Copy interpolated state onto the model. */

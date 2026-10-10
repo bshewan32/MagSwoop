@@ -6,8 +6,10 @@ import { CONFIG } from '../game/config'
 import type { Hint, HudStatus, Point, PopupKind } from '../game/game'
 import { formatClock, stars, type RunState } from '../game/rules'
 import bootIcon from '../../assets/share/favicon.png'
+import { SKINS, VARIANTS, skinById } from '../game/magpies'
+import { errorCode, formatPrice, type BoardId, type FeatherItemId, type Online, type ProductId } from '../online/online'
 
-export type Screen = 'boot' | 'title' | 'hud' | 'pause' | 'settings' | 'leaderboard' | 'results'
+export type Screen = 'boot' | 'title' | 'hud' | 'pause' | 'settings' | 'leaderboard' | 'results' | 'shop' | 'wardrobe' | 'account'
 
 export type UiActions = {
   play(): void
@@ -15,7 +17,14 @@ export type UiActions = {
   restart(): void
   quit(): void
   settings(patch: Partial<SaveData>): void
+  /** Equipped skins changed (per flock bird). */
+  skins(skins: (string | null)[]): void
 }
+
+type BoardTab = 'local' | BoardId
+const esc = (v: unknown) => String(v ?? '').replace(/[&<>"']/g, c => `&#${c.charCodeAt(0)};`)
+
+const SKIN_MONTHLY = ['skin_aurora', 'skin_sunset', 'skin_frost']
 
 const magpieHead = (main: string, accent: string) =>
   `<svg viewBox="0 0 32 32" aria-hidden="true"><path d="M3 17 11 13.5 11 19Z" fill="#dfe3e8" stroke="#141418" stroke-width="1.2"/><circle cx="17" cy="16" r="9" fill="${main}" stroke="#141418" stroke-width="1.6"/><path d="M21 8.5a9 9 0 0 1 4.8 10.5L19 15Z" fill="${accent}"/><circle cx="14.5" cy="14" r="1.8" fill="#9a2f17"/></svg>`
@@ -28,6 +37,9 @@ const ICON = {
   egg: '<svg viewBox="0 0 20 26" aria-hidden="true"><path d="M10 1C4.5 1 1 9.5 1 15.5 1 21 5 25 10 25s9-4 9-9.5C19 9.5 15.5 1 10 1Z" fill="currentColor" stroke="#1b1838" stroke-width="2"/><path class="crack" d="M2.5 13 6 15.5 8.5 12 11.5 16 14 12.5 17.5 15" fill="none" stroke="#1b1838" stroke-width="2"/><circle cx="7" cy="9" r="1.4" fill="#6b5a3e" opacity=".6"/><circle cx="12.5" cy="19" r="1.1" fill="#6b5a3e" opacity=".6"/></svg>',
   note: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 18V5l11-2v13" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/><circle cx="6.5" cy="18" r="3" fill="currentColor"/><circle cx="17.5" cy="16" r="3" fill="currentColor"/></svg>',
   feather: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 3C11 4 5 10 4 20l2 1c1-3 3-6 5-7l-2-1 5-1-2-1 5-3-3-1c3-1 5-2 6-4Z" fill="currentColor"/></svg>',
+  lock: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="10" width="14" height="11" rx="2.5" fill="currentColor"/><path d="M8 10V7a4 4 0 0 1 8 0v3" fill="none" stroke="currentColor" stroke-width="2.4"/></svg>',
+  crown: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 8l4.5 4L12 5l4.5 7L21 8l-2 11H5Z" fill="currentColor"/></svg>',
+  user: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="4.2" fill="currentColor"/><path d="M3.5 21c1.2-4.6 4.4-7 8.5-7s7.3 2.4 8.5 7Z" fill="currentColor"/></svg>',
 }
 
 /** Glyphs for control hints, per input method. */
@@ -51,6 +63,14 @@ export class Ui {
   private savedRank = -1
   private lastMethod = ''
   private lastEggs = -1
+  private boardTab: BoardTab = 'local'
+  private boardPeriod: 'all' | 'week' = 'all'
+  private shopMessage = ''
+  private shopTone: 'good' | 'bad' | '' = ''
+  private busy = false
+  private onlineResult = ''
+  /** Use one bonus egg on the next run (title-screen toggle, shown when the player has some). */
+  wantsBonusEgg = false
 
   constructor(
     private readonly i18n: I18n,
@@ -58,6 +78,7 @@ export class Ui {
     private readonly audio: Audio,
     private readonly input: Input,
     private readonly actions: UiActions,
+    private readonly online: Online,
   ) {
     this.root = document.getElementById('ui')!
     this.root.innerHTML = this.template()
@@ -67,6 +88,7 @@ export class Ui {
       if ((e.target as HTMLElement).matches('.btn, .seg button, .toggle')) this.audio.play('ui')
     })
     window.addEventListener('keydown', e => this.onKey(e))
+    this.online.addEventListener('change', () => this.renderOnline())
     this.translate()
     this.refreshSettings()
   }
@@ -98,8 +120,21 @@ export class Ui {
       el.setAttribute('aria-hidden', String(!active))
     }
     this.root.dataset.activeScreen = screen
-    if (screen === 'title') this.renderBest()
+    if (screen === 'title') {
+      this.renderBest()
+      this.renderSetup()
+    }
     if (screen === 'leaderboard') this.renderLeaderboard()
+    if (screen === 'shop') {
+      this.renderShop()
+      void this.online.loadCatalog().then(() => this.renderShop())
+      void this.online.refresh()
+    }
+    if (screen === 'wardrobe') this.renderWardrobe()
+    if (screen === 'account') {
+      this.renderAccount()
+      void this.loadOrders()
+    }
     if (screen === 'hud') this.lastEggs = -1
     // Focus the first control so keyboard and gamepad players can act immediately.
     requestAnimationFrame(() => {
@@ -123,7 +158,8 @@ export class Ui {
 
     if (run.eggs !== this.lastEggs) {
       const eggs = this.q('.hud-eggs')
-      if (eggs.childElementCount !== CONFIG.run.eggs) eggs.innerHTML = `<span class="hud-egg">${ICON.egg}</span>`.repeat(CONFIG.run.eggs)
+      const clutch = Math.max(CONFIG.run.eggs, run.eggs)
+      if (eggs.childElementCount < clutch || (run.elapsed < 0.5 && eggs.childElementCount !== clutch)) eggs.innerHTML = `<span class="hud-egg">${ICON.egg}</span>`.repeat(clutch)
       for (const [i, egg] of this.qa('.hud-egg').entries()) egg.classList.toggle('is-lost', i >= run.eggs)
       this.lastEggs = run.eggs
     }
@@ -230,10 +266,12 @@ export class Ui {
     const fmt = (v: number) => v.toLocaleString('en')
     this.q('.r-scares').textContent = fmt(run.scares)
     this.q('.r-hits').textContent = fmt(run.hits)
-    this.q('.r-people').textContent = this.i18n.t('results.peopleSplit', { c: run.cyclists, r: run.runners })
+    const split = [['cyclists', run.cyclists], ['runners', run.runners], ['surfers', run.surfers], ['scooters', run.scooters]]
+      .filter(([, n]) => (n as number) > 0).map(([k, n]) => this.i18n.t(`results.split.${k}`, { n: n as number }))
+    this.q('.r-people').textContent = split.join(' · ') || '0'
     this.q('.r-defended').textContent = fmt(run.defended)
     this.q('.r-combo').textContent = `×${run.bestCombo}`
-    this.q('.r-eggs').textContent = `${run.eggs} / ${CONFIG.run.eggs}`
+    this.q('.r-eggs').textContent = run.mode === 'endless' ? this.i18n.t('results.endlessTime', { t: formatClock(run.elapsed) }) : `${run.eggs} / ${CONFIG.run.eggs}`
     this.q('.r-egg-bonus').textContent = `+${fmt(run.eggBonus)}`
     this.q('.r-total').textContent = fmt(run.score)
     const best = this.save.data.leaderboard[0]?.score ?? 0
@@ -243,8 +281,26 @@ export class Ui {
     form.classList.remove('is-saved')
     this.q<HTMLInputElement>('.results-name').value = this.save.data.playerName
     this.q('.results-rank').textContent = ''
+    this.onlineResult = run.unranked ? 'results.online.unranked' : this.online.signedIn ? 'results.online.sending' : this.online.offline ? '' : 'results.online.login'
+    this.renderOnlineResult()
     this.translate()
     this.show('results')
+  }
+
+  /** Called by main.ts when the online submission finishes. */
+  onlineSubmitted(r: { ok: boolean; feathers: number } | null): void {
+    if (!r) this.onlineResult = this.online.signedIn ? 'results.online.failed' : this.onlineResult
+    else this.onlineResult = r.ok ? (r.feathers > 0 ? 'results.online.feathers' : 'results.online.posted') : 'results.online.failed'
+    this.lastFeathers = r?.feathers ?? 0
+    this.renderOnlineResult()
+  }
+
+  private lastFeathers = 0
+  private renderOnlineResult(): void {
+    const el = this.q('.results-online')
+    el.classList.toggle('is-hidden', !this.onlineResult)
+    el.querySelector('span')!.textContent = this.onlineResult ? this.i18n.t(this.onlineResult, { n: this.lastFeathers }) : ''
+    el.querySelector('button')!.classList.toggle('is-hidden', this.onlineResult !== 'results.online.login')
   }
 
   private entry(run: RunState) {
@@ -263,6 +319,14 @@ export class Ui {
   }
 
   private renderLeaderboard(): void {
+    for (const b of this.qa<HTMLButtonElement>('.board-tabs button')) b.setAttribute('aria-pressed', String(b.dataset.tab === this.boardTab))
+    for (const b of this.qa<HTMLButtonElement>('.board-period button')) b.setAttribute('aria-pressed', String(b.dataset.period === this.boardPeriod))
+    this.q('.board-period').classList.toggle('is-hidden', this.boardTab === 'local')
+    this.q('.board-head span[data-i18n="leaderboard.time"]').classList.toggle('is-hidden', this.boardTab !== 'local')
+    if (this.boardTab !== 'local') {
+      void this.renderOnlineBoard(this.boardTab)
+      return
+    }
     const list = this.q('.board')
     const board = this.save.data.leaderboard
     if (board.length === 0) {
@@ -274,6 +338,236 @@ export class Ui {
       .join('')
     // Names are player-entered text: assign via textContent, never innerHTML.
     list.querySelectorAll('.board-name').forEach((el, i) => (el.textContent = board[i].name))
+  }
+
+  private async renderOnlineBoard(id: BoardId): Promise<void> {
+    const list = this.q('.board')
+    if (this.online.offline) {
+      list.innerHTML = `<li class="board-empty">${esc(this.i18n.t('online.offline'))}</li>`
+      return
+    }
+    list.innerHTML = `<li class="board-empty">${esc(this.i18n.t('online.loading'))}</li>`
+    const period = this.boardPeriod
+    try {
+      const entries = await this.online.boardEntries(id, period)
+      if (this.boardTab !== id || this.boardPeriod !== period) return
+      if (!entries.length) {
+        list.innerHTML = `<li class="board-empty">${esc(this.i18n.t('leaderboard.emptyOnline'))}</li>`
+        return
+      }
+      list.innerHTML = entries.map(e => `<li class="${e.me ? 'is-me' : ''}"><b>${e.rank}</b><span class="board-name"></span>${e.member ? `<span class="badge-club" title="${esc(this.i18n.t('club.badge'))}">${ICON.crown}</span>` : '<span></span>'}<em>${e.score.toLocaleString('en')}</em></li>`).join('')
+      list.querySelectorAll('.board-name').forEach((el, i) => (el.textContent = entries[i].name))
+    } catch {
+      if (this.boardTab === id) list.innerHTML = `<li class="board-empty">${esc(this.i18n.t('online.error'))}</li>`
+    }
+  }
+
+  // ─── online: account chip, setup, shop, wardrobe, account ───────────────
+
+  private renderOnline(): void {
+    const chip = this.q('.account-chip')
+    const o = this.online
+    chip.classList.toggle('is-hidden', o.offline)
+    if (o.signedIn) {
+      chip.innerHTML = `${ICON.user}<span class="chip-name"></span>${o.state.membership.active ? `<span class="badge-club">${ICON.crown}</span>` : ''}<span class="chip-feathers">${ICON.feather}<b>${o.state.feathers.toLocaleString('en')}</b></span>`
+      chip.querySelector('.chip-name')!.textContent = o.session.user?.name ?? this.i18n.t('account.player')
+    } else {
+      chip.innerHTML = `${ICON.user}<span>${esc(this.i18n.t('account.login'))}</span>`
+    }
+    if (this.screen === 'title') this.renderSetup()
+    if (this.screen === 'shop') this.renderShop()
+    if (this.screen === 'wardrobe') this.renderWardrobe()
+    if (this.screen === 'account') this.renderAccount()
+  }
+
+  /** Mode and location buttons on the title screen (Season+ options show a lock). */
+  private renderSetup(): void {
+    const d = this.save.data
+    const plus = this.online.seasonPlus
+    const mode = this.q('[data-action="cycle-mode"]')
+    mode.innerHTML = `<span>${esc(this.i18n.t(`mode.${d.mode}`))}</span>${!plus && d.mode !== 'classic' ? ICON.lock : ''}`
+    const loc = this.q('[data-action="cycle-location"]')
+    loc.innerHTML = `<span>${esc(this.i18n.t(`location.${d.location}`))}</span>${!plus && d.location !== 'park' ? ICON.lock : ''}`
+    const egg = this.q('[data-action="toggle-egg"]')
+    const eggs = this.online.signedIn ? this.online.state.bonusEggs : 0
+    if (eggs < 1) this.wantsBonusEgg = false
+    egg.classList.toggle('is-hidden', eggs < 1)
+    egg.setAttribute('aria-pressed', String(this.wantsBonusEgg))
+    egg.innerHTML = `<span class="egg-icon">${ICON.egg}</span><span>${esc(this.i18n.t(this.wantsBonusEgg ? 'setup.eggOn' : 'setup.eggOff', { n: eggs }))}</span>`
+  }
+
+  private flash(message: string, tone: 'good' | 'bad' | '' = ''): void {
+    this.shopMessage = message
+    this.shopTone = tone
+    for (const el of this.qa('.store-message')) {
+      el.textContent = message ? this.i18n.t(message) : ''
+      el.dataset.tone = tone
+    }
+  }
+
+  /** Message shown in place of buy buttons when buying is not possible here. */
+  private storeGate(): string {
+    const o = this.online
+    if (o.offline) return `<div class="store-gate"><p>${esc(this.i18n.t('online.offline'))}</p></div>`
+    if (!o.signedIn) return `<div class="store-gate"><p>${esc(this.i18n.t('shop.loginToBuy'))}</p><button data-nav class="btn btn-small btn-primary" data-action="login"><span>${esc(this.i18n.t('account.login'))}</span></button></div>`
+    if (o.embedded) return `<div class="store-gate"><p>${esc(this.i18n.t('shop.openTab'))}</p><button data-nav class="btn btn-small btn-primary" data-action="standalone"><span>${esc(this.i18n.t('shop.openTabButton'))}</span></button></div>`
+    if (o.catalog && !o.catalog.paymentsEnabled) return `<div class="store-gate"><p>${esc(this.i18n.t('shop.unavailable'))}</p></div>`
+    return ''
+  }
+
+  private renderShop(): void {
+    const o = this.online
+    const cat = o.catalog
+    const owned = (id: ProductId) => (id === 'skins_pack' ? ['skin_albino', 'skin_golden', 'skin_night'].every(s => o.owns(s)) : id === 'season_plus' ? o.seasonPlus : id === 'swoop_club' ? o.state.membership.active : false)
+    const gate = this.storeGate()
+    const canBuy = !gate
+    const cards = (cat?.products ?? []).map(p => {
+      const have = owned(p.id)
+      const price = `${formatPrice(p.amount, cat?.currency)}${p.interval ? ` / ${esc(this.i18n.t(`shop.per.${p.interval}`))}` : ''}`
+      const btn = have
+        ? `<span class="product-owned">${esc(this.i18n.t(p.kind === 'subscription' ? 'shop.member' : 'shop.owned'))}</span>`
+        : canBuy ? `<button data-nav class="btn btn-small ${p.kind === 'subscription' ? 'btn-primary' : ''}" data-action="buy" data-product="${p.id}"><span>${esc(this.i18n.t(p.kind === 'subscription' ? 'shop.join' : 'shop.buy'))}</span></button>` : ''
+      return `<article class="product product-${p.id}"><div class="product-art">${this.productArt(p.id)}</div><h3>${esc(p.name)}</h3><p>${esc(p.description)}</p><div class="product-foot"><b>${price}</b>${btn}</div></article>`
+    }).join('')
+    const items = (cat?.featherItems ?? []).map(i => {
+      const skin = skinById(i.id)
+      const have = skin ? o.owns(i.id) : false
+      const label = skin ? this.i18n.t(skin.nameKey) : this.i18n.t('shop.bonusEgg')
+      const extra = !skin ? `<small>${esc(this.i18n.t('shop.bonusEggHave', { n: o.state.bonusEggs }))}</small>` : ''
+      const btn = have ? `<span class="product-owned">${esc(this.i18n.t('shop.owned'))}</span>`
+        : o.signedIn && !o.offline ? `<button data-nav class="btn btn-small" data-action="spend" data-item="${i.id}" ${o.state.feathers < i.cost ? 'data-short="1"' : ''}><span>${ICON.feather}${i.cost}</span></button>` : `<span class="product-price">${ICON.feather}${i.cost}</span>`
+      return `<div class="feather-item">${skin ? `<span class="swatch" style="--a:${skin.swatch[0]};--b:${skin.swatch[1]}"></span>` : `<span class="swatch swatch-egg">${ICON.egg}</span>`}<span class="feather-name">${esc(label)}${extra}</span>${btn}</div>`
+    }).join('')
+    this.q('.shop-body').innerHTML = `
+      ${gate}
+      <div class="products">${cards || `<p class="board-empty">${esc(this.i18n.t(o.offline ? 'online.offline' : 'online.loading'))}</p>`}</div>
+      <h3 class="shop-sub">${ICON.feather}<span>${esc(this.i18n.t('shop.featherShop'))}</span>${o.signedIn ? `<b class="shop-balance">${o.state.feathers.toLocaleString('en')}</b>` : ''}</h3>
+      <p class="shop-note">${esc(this.i18n.t('shop.earn'))}</p>
+      <div class="feather-items">${items}</div>
+      <p class="shop-note shop-test">${esc(this.i18n.t('shop.testMode'))}</p>`
+    this.flash(this.shopMessage, this.shopTone)
+  }
+
+  private productArt(id: ProductId): string {
+    if (id === 'skins_pack') return ['skin_albino', 'skin_golden', 'skin_night'].map(k => { const sk = skinById(k)!; return magpieHead(sk.swatch[0], sk.swatch[1]) }).join('')
+    if (id === 'season_plus') return '<svg viewBox="0 0 64 32" aria-hidden="true"><rect width="64" height="32" rx="6" fill="#ecd9a8"/><path d="M0 22c8-4 16 4 24 0s16-4 24 0 12 2 16 0v10H0Z" fill="#2b8db3"/><path d="M0 25c8-3 16 3 24 0s16-3 24 0 12 2 16 0" fill="none" stroke="#fff" stroke-width="1.5"/><path d="M14 6v14M10 9l4-3 4 3M8 12l6-3 6 3" stroke="#2f5d3a" stroke-width="2.2" fill="none"/><text x="46" y="17" font-size="12" font-weight="900" fill="#141418" text-anchor="middle">∞</text></svg>'
+    if (id === 'feathers_500') return `<span class="art-feathers">${ICON.feather}${ICON.feather}${ICON.feather}</span>`
+    return `<span class="art-club">${ICON.crown}</span>`
+  }
+
+  private renderWardrobe(): void {
+    const o = this.online
+    const equipped = this.save.data.skins
+    const available = (id: string) => o.owns(id)
+    this.q('.wardrobe-body').innerHTML = VARIANTS.map((v, bi) => {
+      const options = [null, ...SKINS.map(sk => sk.id)].map(id => {
+        const sk = skinById(id)
+        const on = (equipped[bi] ?? null) === id
+        const ok = id === null || available(id)
+        const main = sk ? sk.swatch[0] : v.swatch[0]
+        const accent = sk ? sk.swatch[1] : v.swatch[1]
+        const name = sk ? this.i18n.t(sk.nameKey) : this.i18n.t('wardrobe.natural')
+        const tag = sk && !ok ? (sk.id === 'skin_crested' || SKIN_MONTHLY.includes(sk.id) ? this.i18n.t('wardrobe.clubOnly') : this.i18n.t('wardrobe.locked')) : ''
+        return `<button data-nav class="skin-opt ${on ? 'is-on' : ''} ${ok ? '' : 'is-locked'}" data-action="equip" data-bird="${bi}" data-skin="${id ?? ''}" aria-pressed="${on}" title="${esc(name)}"><span class="skin-head">${magpieHead(main, accent)}</span><small>${esc(name)}</small>${tag ? `<em>${ICON.lock}${esc(tag)}</em>` : ''}</button>`
+      }).join('')
+      return `<div class="wardrobe-row"><div class="wardrobe-bird"><b>${esc(this.i18n.t(v.nameKey))}</b><small>${esc(this.i18n.t(v.traitKey))}</small></div><div class="wardrobe-opts">${options}</div></div>`
+    }).join('') + `<p class="shop-note">${esc(this.i18n.t(o.signedIn ? 'wardrobe.note' : 'wardrobe.loginNote'))}</p>`
+  }
+
+  private renderAccount(): void {
+    const o = this.online
+    const m = o.state.membership
+    const date = (iso: string | null) => (iso ? new Date(iso).toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' }) : '')
+    let club = ''
+    if (m.active) {
+      club = `<p>${esc(this.i18n.t(m.cancelAtPeriodEnd ? 'club.ends' : 'club.renews', { date: date(m.renewsAt) }))}</p>
+        <div class="menu menu-row">${m.cancelAtPeriodEnd
+          ? `<button data-nav class="btn btn-small btn-primary" data-action="club-resume"><span>${esc(this.i18n.t('club.resume'))}</span></button>`
+          : `<button data-nav class="btn btn-small" data-action="club-cancel"><span>${esc(this.i18n.t('club.cancel'))}</span></button>`}
+          ${o.embedded ? '' : `<button data-nav class="btn btn-small" data-action="portal"><span>${esc(this.i18n.t('club.billing'))}</span></button>`}</div>`
+    } else {
+      club = `<p>${esc(this.i18n.t(m.status === 'past_due' || m.status === 'unpaid' ? 'club.pastDue' : 'club.none'))}</p><div class="menu menu-row"><button data-nav class="btn btn-small" data-action="shop"><span>${esc(this.i18n.t('club.join'))}</span></button></div>`
+    }
+    const body = o.offline
+      ? `<p class="store-gate">${esc(this.i18n.t('online.offline'))}</p>`
+      : !o.signedIn
+        ? `<div class="store-gate"><p>${esc(this.i18n.t('account.why'))}</p><button data-nav class="btn btn-primary" data-action="login"><span>${esc(this.i18n.t('account.login'))}</span></button></div>`
+        : `<div class="account-grid">
+            <section><h3>${ICON.user}<span class="acct-name"></span></h3>
+              <dl class="acct-stats"><div><dt>${esc(this.i18n.t('account.feathers'))}</dt><dd>${ICON.feather}${o.state.feathers.toLocaleString('en')}</dd></div><div><dt>${esc(this.i18n.t('account.bonusEggs'))}</dt><dd>${o.state.bonusEggs}</dd></div><div><dt>${esc(this.i18n.t('account.seasonPlus'))}</dt><dd>${esc(this.i18n.t(o.seasonPlus ? 'account.yes' : 'account.no'))}</dd></div></dl>
+              <div class="menu menu-row"><button data-nav class="btn btn-small" data-action="restore"><span>${esc(this.i18n.t('account.restore'))}</span></button><button data-nav class="btn btn-small" data-action="logout"><span>${esc(this.i18n.t('account.logout'))}</span></button></div></section>
+            <section><h3>${ICON.crown}<span>${esc(this.i18n.t('club.title'))}</span></h3>${club}</section>
+            <section class="acct-orders"><h3><span>${esc(this.i18n.t('account.purchases'))}</span></h3><ol class="orders"><li class="board-empty">${esc(this.i18n.t('online.loading'))}</li></ol></section>
+          </div>`
+    this.q('.account-body').innerHTML = body + `<p class="store-message" data-tone=""></p>`
+    const n = this.root.querySelector('.acct-name')
+    if (n) n.textContent = o.session.user?.name ?? this.i18n.t('account.player')
+    this.flash(this.shopMessage, this.shopTone)
+  }
+
+  private async loadOrders(): Promise<void> {
+    if (!this.online.signedIn) return
+    try {
+      const orders = await this.online.orders()
+      const list = this.root.querySelector('.orders')
+      if (!list) return
+      list.innerHTML = orders.length
+        ? orders.map(o => `<li><span class="order-name"></span><small>${esc(new Date(o.at).toLocaleDateString('en-AU'))}</small><em class="order-${o.status}">${esc(this.i18n.t(`order.${o.status}`))}</em><b>${esc(formatPrice(o.amount, o.currency))}</b></li>`).join('')
+        : `<li class="board-empty">${esc(this.i18n.t('account.noPurchases'))}</li>`
+      list.querySelectorAll('.order-name').forEach((el, i) => (el.textContent = orders[i].name))
+    } catch {
+      const list = this.root.querySelector('.orders')
+      if (list) list.innerHTML = `<li class="board-empty">${esc(this.i18n.t('online.error'))}</li>`
+    }
+  }
+
+  /** Show the outcome of a Stripe Checkout return (called by main.ts). */
+  checkoutReturned(state: 'processing' | 'paid' | 'failed' | 'cancel' | 'waiting'): void {
+    const key = { waiting: 'checkout.waiting', processing: 'checkout.processing', paid: 'checkout.paid', failed: 'checkout.failed', cancel: 'checkout.cancel' }[state]
+    this.flash(key, state === 'paid' ? 'good' : state === 'waiting' || state === 'processing' ? '' : 'bad')
+    if (this.screen !== 'shop') this.push('shop')
+    else this.renderShop()
+    if (state === 'paid') this.audio.play('win')
+  }
+
+  private async run(task: () => Promise<void>, okKey = ''): Promise<void> {
+    if (this.busy) return
+    this.busy = true
+    this.root.classList.add('is-busy')
+    try {
+      await task()
+      if (okKey) this.flash(okKey, 'good')
+    } catch (error) {
+      const code = errorCode(error)
+      this.flash(`error.${['login_required', 'offline', 'already_owned', 'already_member', 'not_enough_feathers', 'no_membership', 'payments_unavailable', 'no_billing_account'].includes(code) ? code : 'generic'}`, 'bad')
+    } finally {
+      this.busy = false
+      this.root.classList.remove('is-busy')
+      if (this.screen === 'shop') this.renderShop()
+      if (this.screen === 'account') this.renderAccount()
+      if (this.screen === 'wardrobe') this.renderWardrobe()
+    }
+  }
+
+  private equip(bird: number, skin: string | null): void {
+    if (skin && !this.online.owns(skin)) {
+      this.flash(this.online.signedIn ? 'wardrobe.getIt' : 'shop.loginToBuy', 'bad')
+      this.push('shop')
+      return
+    }
+    const skins = [...this.save.data.skins]
+    skins[bird] = skin
+    this.actions.skins(skins)
+    this.renderWardrobe()
+    this.audio.play('switch')
+  }
+
+  private cycle(kind: 'mode' | 'location'): void {
+    const d = this.save.data
+    const next = kind === 'mode' ? (d.mode === 'classic' ? 'endless' : 'classic') : (d.location === 'park' ? 'beach' : 'park')
+    this.actions.settings(kind === 'mode' ? { mode: next as SaveData['mode'] } : { location: next as SaveData['location'] })
+    this.renderSetup()
+    if (next !== 'classic' && next !== 'park' && !this.online.seasonPlus) this.banner('setup.locked', 'bad')
   }
 
   private renderBest(): void {
@@ -328,6 +622,28 @@ export class Ui {
       case 'back': this.back(); break
       case 'save-score': this.saveScore(); break
       case 'pause': window.dispatchEvent(new CustomEvent('game:pause')); break
+      case 'shop': this.flash(''); this.push('shop'); break
+      case 'wardrobe': this.push('wardrobe'); break
+      case 'account': this.flash(''); if (this.online.offline) break; this.push('account'); break
+      case 'login': this.online.login(); break
+      case 'logout': void this.run(() => this.online.logout()); break
+      case 'standalone': this.online.openStandalone(); break
+      case 'restore': void this.run(() => this.online.refresh(), 'account.restored'); break
+      case 'buy': void this.run(() => this.online.checkout(target.dataset.product as ProductId)); break
+      case 'spend': {
+        if (target.dataset.short) { this.flash('error.not_enough_feathers', 'bad'); break }
+        void this.run(() => this.online.spend(target.dataset.item as FeatherItemId), 'shop.spent')
+        break
+      }
+      case 'club-cancel': void this.run(() => this.online.setMembershipCancel(true), 'club.cancelled'); break
+      case 'club-resume': void this.run(() => this.online.setMembershipCancel(false), 'club.resumed'); break
+      case 'portal': void this.run(() => this.online.billingPortal()); break
+      case 'equip': this.equip(Number(target.dataset.bird), target.dataset.skin || null); break
+      case 'cycle-mode': this.cycle('mode'); break
+      case 'toggle-egg': this.wantsBonusEgg = !this.wantsBonusEgg; this.renderSetup(); break
+      case 'cycle-location': this.cycle('location'); break
+      case 'board-tab': this.boardTab = target.dataset.tab as BoardTab; this.renderLeaderboard(); break
+      case 'board-period': this.boardPeriod = target.dataset.period as 'all' | 'week'; this.renderLeaderboard(); break
     }
   }
 
@@ -474,6 +790,7 @@ export class Ui {
 <section class="screen screen-title" data-screen="title">
   <div class="title-vignette"></div>
   <div class="title-best is-hidden"></div>
+  <button data-nav class="account-chip" data-action="account"></button>
   <div class="title-block">
     <div class="logo">
       <span class="logo-gem">${ICON.logo}</span>
@@ -482,8 +799,17 @@ export class Ui {
     <p class="tagline" data-i18n="game.tagline"></p>
     <nav class="menu">
       <button data-nav class="btn btn-primary" data-action="play"><span data-i18n="menu.play"></span></button>
-      <button data-nav class="btn" data-action="leaderboard"><span data-i18n="menu.leaderboard"></span></button>
-      <button data-nav class="btn" data-action="settings"><span data-i18n="menu.settings"></span></button>
+      <div class="setup-row">
+        <button data-nav class="btn btn-small btn-setup" data-action="cycle-mode"></button>
+        <button data-nav class="btn btn-small btn-setup" data-action="cycle-location"></button>
+        <button data-nav class="btn btn-small btn-setup is-hidden" data-action="toggle-egg"></button>
+      </div>
+      <button data-nav class="btn btn-shop" data-action="shop"><span data-i18n="menu.shop"></span></button>
+      <div class="menu-sub">
+        <button data-nav class="btn btn-small" data-action="wardrobe"><span data-i18n="menu.wardrobe"></span></button>
+        <button data-nav class="btn btn-small" data-action="leaderboard"><span data-i18n="menu.leaderboard"></span></button>
+        <button data-nav class="btn btn-small" data-action="settings"><span data-i18n="menu.settings"></span></button>
+      </div>
     </nav>
   </div>
   <div class="title-flock">${flock}</div>
@@ -562,8 +888,39 @@ export class Ui {
 <section class="screen screen-leaderboard screen-modal" data-screen="leaderboard">
   <div class="modal">
     <h2 class="modal-title" data-i18n="leaderboard.title"></h2>
+    <div class="seg-tabs board-tabs"><button data-nav data-action="board-tab" data-tab="local" data-i18n="leaderboard.local"></button><button data-nav data-action="board-tab" data-tab="season-v1" data-i18n="leaderboard.classic"></button><button data-nav data-action="board-tab" data-tab="endless-v1" data-i18n="leaderboard.endless"></button></div>
+    <div class="seg-tabs board-period is-hidden"><button data-nav data-action="board-period" data-period="all" data-i18n="leaderboard.allTime"></button><button data-nav data-action="board-period" data-period="week" data-i18n="leaderboard.week"></button></div>
     <div class="board-head"><b>#</b><span></span><span data-i18n="leaderboard.time"></span><em data-i18n="leaderboard.score"></em></div>
     <ol class="board"></ol>
+    <nav class="menu menu-row"><button data-nav class="btn" data-action="back"><span data-i18n="menu.back"></span></button></nav>
+  </div>
+  <footer class="bottom-bar"><div class="prompts"></div></footer>
+</section>
+
+<section class="screen screen-shop screen-modal" data-screen="shop">
+  <div class="modal modal-wide modal-store">
+    <h2 class="modal-title" data-i18n="shop.title"></h2>
+    <p class="store-message" data-tone=""></p>
+    <div class="shop-body store-scroll"></div>
+    <nav class="menu menu-row"><button data-nav class="btn" data-action="wardrobe"><span data-i18n="menu.wardrobe"></span></button><button data-nav class="btn" data-action="back"><span data-i18n="menu.back"></span></button></nav>
+  </div>
+  <footer class="bottom-bar"><div class="prompts"></div></footer>
+</section>
+
+<section class="screen screen-wardrobe screen-modal" data-screen="wardrobe">
+  <div class="modal modal-wide modal-store">
+    <h2 class="modal-title" data-i18n="wardrobe.title"></h2>
+    <p class="store-message" data-tone=""></p>
+    <div class="wardrobe-body store-scroll"></div>
+    <nav class="menu menu-row"><button data-nav class="btn" data-action="shop"><span data-i18n="menu.shop"></span></button><button data-nav class="btn" data-action="back"><span data-i18n="menu.back"></span></button></nav>
+  </div>
+  <footer class="bottom-bar"><div class="prompts"></div></footer>
+</section>
+
+<section class="screen screen-account screen-modal" data-screen="account">
+  <div class="modal modal-wide modal-store">
+    <h2 class="modal-title" data-i18n="account.title"></h2>
+    <div class="account-body store-scroll"></div>
     <nav class="menu menu-row"><button data-nav class="btn" data-action="back"><span data-i18n="menu.back"></span></button></nav>
   </div>
   <footer class="bottom-bar"><div class="prompts"></div></footer>
@@ -589,6 +946,7 @@ export class Ui {
       <span class="results-saved" data-i18n="results.saved"></span>
       <span class="results-rank"></span>
     </div>
+    <div class="results-online is-hidden"><span></span><button data-nav class="btn btn-small" data-action="login"><span data-i18n="account.login"></span></button></div>
     <nav class="menu menu-row">
       <button data-nav class="btn btn-primary" data-action="restart"><span data-i18n="results.retry"></span></button>
       <button data-nav class="btn" data-action="quit"><span data-i18n="results.title"></span></button>

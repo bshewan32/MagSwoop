@@ -7,10 +7,10 @@ import { Bird, angleDelta, type BirdEvent, type BirdMode, type SwoopTarget } fro
 import { ChaseCamera } from './camera'
 import { CONFIG } from './config'
 import { Effects } from './fx'
-import { VARIANTS, type Variant } from './magpies'
-import { PARK, PERCHES } from './park'
+import { VARIANTS, type Skin, type Variant } from './magpies'
+import { PARK, PERCHES, WHEELED, setLocation, type LocationId } from './park'
 import { Crowd, type Person } from './people'
-import { carol, createRun, loseEgg, scorePerson, tick, type Outcome, type RunState } from './rules'
+import { carol, createRun, loseEgg, pressure, scorePerson, tick, type Outcome, type RunMode, type RunState } from './rules'
 import { tuning } from './tuning'
 import { World } from './world'
 
@@ -28,6 +28,8 @@ export type GameHooks = {
   tutorialDone(): void
   end(run: RunState): void
 }
+
+export type StartOptions = { tutorial: boolean; mode: RunMode; location: LocationId; bonusEggs: number }
 
 export type BirdStatus = { variant: Variant; stamina: number; tired: boolean; active: boolean; mode: BirdMode }
 export type HudStatus = {
@@ -47,7 +49,9 @@ export class Game {
   mode: GameMode = 'title'
   run: RunState = createRun()
   reducedMotion = false
-  readonly world: World
+  world: World
+  private readonly worlds = new Map<LocationId, World>()
+  private readonly quality: Quality
   readonly cam = new ChaseCamera()
   readonly fx = new Effects()
   readonly flock: Bird[]
@@ -68,7 +72,10 @@ export class Game {
   private readonly right = new THREE.Vector3()
 
   constructor(private readonly renderer: Renderer, private readonly input: Input, private readonly audio: Audio, private readonly hooks: GameHooks, quality: Quality) {
+    this.quality = quality
+    setLocation('park')
     this.world = new World(renderer.shadowMapSize, quality === 'low')
+    this.worlds.set('park', this.world)
     this.flock = VARIANTS.map((variant, i) => new Bird(variant, PERCHES[i]))
     for (const b of this.flock) this.world.scene.add(b.model.root)
     this.crowd = new Crowd(this.world.scene)
@@ -76,13 +83,41 @@ export class Game {
     this.world.scene.add(this.fx.mesh)
   }
 
+  get location(): LocationId {
+    return this.world.location.id
+  }
+
+  /** Move the flock, crowd and effects to another location (scenery is built once and cached). */
+  setLocation(id: LocationId): void {
+    if (id === this.location) return
+    setLocation(id)
+    let world = this.worlds.get(id)
+    if (!world) {
+      world = new World(this.renderer.shadowMapSize, this.quality === 'low')
+      this.worlds.set(id, world)
+    }
+    this.world = world
+    for (const b of this.flock) world.scene.add(b.model.root)
+    world.scene.add(this.fx.mesh)
+    this.crowd.setScene(world.scene)
+    this.crowd.reset(this.seed++)
+    for (const b of this.flock) b.land()
+  }
+
+  /** Apply each bird's equipped skin (null = natural plumage). */
+  setSkins(skins: (Skin | null)[]): void {
+    this.flock.forEach((b, i) => b.setSkin(skins[i] ?? null))
+  }
+
   get bird(): Bird {
     return this.flock[this.active]
   }
 
-  start(tutorial: boolean): void {
+  start(opts: StartOptions): void {
+    const tutorial = opts.tutorial
     tuning.activate('run')
-    this.run = { ...createRun(), unranked: tuning.unranked }
+    this.setLocation(opts.location)
+    this.run = { ...createRun(opts.mode, opts.bonusEggs), unranked: tuning.unranked }
     for (const b of this.flock) {
       b.land()
       b.stamina = 1
@@ -151,7 +186,7 @@ export class Game {
 
   step(dt: number): void {
     if (this.mode === 'paused') return
-    const progress = this.mode === 'playing' ? this.run.elapsed / CONFIG.run.seconds : 0.25
+    const progress = this.mode === 'playing' ? pressure(this.run) : 0.25
     if (this.mode !== 'playing') {
       for (const b of this.flock) b.stepAI(dt)
       this.crowd.step(dt, progress)
@@ -277,8 +312,10 @@ export class Game {
       else if (d < scareR) {
         if (!p.threat) {
           p.threat = true
-          this.audio.play('yelp', { ...this.spatial(p.aim), pitch: p.kind === 'cyclist' ? 0.9 : 1.15 + (p.id % 3) * 0.1 })
+          const wheeled = WHEELED.includes(p.kind)
+          this.audio.play('yelp', { ...this.spatial(p.aim), pitch: wheeled ? 0.9 : p.kind === 'surfer' ? 1.0 + (p.id % 3) * 0.08 : 1.15 + (p.id % 3) * 0.1 })
           if (p.kind === 'cyclist') this.audio.play('bell', this.spatial(p.aim))
+          if (p.kind === 'scooter') this.audio.play('bell', { ...this.spatial(p.aim), pitch: 1.6 })
         }
       } else if (p.threat) this.resolve(p, 'scare')
     }
@@ -287,8 +324,14 @@ export class Game {
   private resolve(p: Person, outcome: Outcome): void {
     const bird = this.bird
     const inNest = p.inNest
+    const before = this.run.eggs
     const r = scorePerson(this.run, p.kind, outcome, inNest)
     this.run = r.state
+    if (this.run.eggs > before) {
+      this.world.setEggs(this.run.eggs)
+      this.audio.play('egg', { pitch: 1.5 })
+      this.hooks.banner('banner.restock', 'good')
+    }
     p.flee(bird.pos, outcome === 'hit')
     const at = this.screen(p.aim, { x: 0.5, y: 0.35 })
     this.hooks.popup(`+${r.points}`, at, outcome === 'hit' ? 'hit' : 'score')

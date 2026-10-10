@@ -15,6 +15,10 @@ export const DEFAULT_CONFIG = {
     scareCyclist: 150,
     hitRunner: 250,
     hitCyclist: 350,
+    scareSurfer: 120,
+    hitSurfer: 300,
+    scareScooter: 170,
+    hitScooter: 380,
     /** Extra points for clearing an intruder out of the nest zone. */
     defendBonus: 100,
     /** Consecutive scares within `comboWindow` seconds raise the multiplier up to `comboMax`. */
@@ -71,7 +75,17 @@ export const DEFAULT_CONFIG = {
     spawnEveryLate: 1.3,
     runnerSpeed: 3.3,
     cyclistSpeed: 7,
+    surferSpeed: 2.3,
+    scooterSpeed: 8.2,
     fleeBoost: 1.9,
+  },
+  endless: {
+    /** Seconds for the crowd to reach full late-season density; it keeps rising past that. */
+    rampSeconds: 180,
+    /** Crowd pressure keeps growing to this multiple of the late-season level. */
+    maxPressure: 1.6,
+    /** Every this many points the parents restock a lost egg (up to the full clutch). */
+    restockEvery: 5000,
   },
   camera: {
     distance: 5.2,
