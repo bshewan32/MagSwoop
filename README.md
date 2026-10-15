@@ -69,6 +69,15 @@ The game is free and fully playable without an account. Logging in with Manus (t
 - **E2E payment check**: `cd server && node e2e-checkout.mjs skins_pack` (creates a throwaway user, pays with the test card in real Checkout, waits for the webhook, cleans up).
 - **Going live**: claim the Stripe sandbox, complete Stripe verification, then add live keys in Settings → Payment. Test with a real card at A$0.50+ before launch.
 
+## Home screen (install as an app)
+
+- **iPhone/iPad**: Safari → Share → Add to Home Screen. The title screen shows an **Install app** button with these steps (hidden once installed, and inside the Manus preview).
+- **Android / desktop Chrome & Edge**: **Install app** opens the browser's own install dialog.
+- Opens full screen with its own icon (`public/icons/`, manifest `public/manifest.webmanifest`; the project's PWA mode is `application_owned`).
+- **Offline**: `scripts/sw-plugin.mjs` writes `dist/sw.js` at build time from `scripts/sw-template.js`, precaching the exact build. Pages are network-first (so login/checkout returns and new versions arrive), assets cache-first, `/api/*` is never cached. Shop, login and online scores need a connection; the game itself plays offline.
+- **Updates** download in the background and apply only from the title screen, never mid-run.
+- iOS: the game asks for the "playback" audio session so magpie songs play even with the ringer switch on silent.
+
 ## Layout
 
 | Path | Role |

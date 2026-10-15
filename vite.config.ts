@@ -1,4 +1,5 @@
 import { manusGameTuning } from './scripts/manus-tuning/vite.mjs'
+import { serviceWorker } from './scripts/sw-plugin.mjs'
 import { loadEnv } from 'vite'
 import { defineConfig } from 'vitest/config'
 
@@ -9,7 +10,7 @@ export default defineConfig(({ mode }) => {
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('Invalid PORT')
   return {
     base: './',
-    plugins: [manusGameTuning()],
+    plugins: [manusGameTuning(), serviceWorker()],
     server: {
       host: env.HOST ?? '127.0.0.1', port, strictPort: true,
       // Dev only: the game API (server/index.mjs) runs beside Vite on API_PORT; published builds

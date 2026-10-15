@@ -590,3 +590,57 @@ body.has-touch .hud-flock .flock-info b { font-size: 11px; }
 .menu-sub { display: flex; gap: 8px; flex-wrap: wrap; max-width: 460px; }
 .menu-sub .btn { min-width: 0; padding: 9px 16px; font-size: 15px; }
 .screen-title .menu .btn:not(.btn-small):not(.btn-primary) { padding-top: 12px; padding-bottom: 12px; }
+/* ─── Home-screen install ───────────────────────────────────────────── */
+.btn-install { display: inline-flex; align-items: center; gap: 6px; color: var(--cyan); }
+.btn-install svg { width: 16px; height: 16px; flex: none; }
+.modal-install { max-width: 520px; align-items: center; text-align: center; gap: 12px; }
+.install-icon { width: 96px; height: 96px; border-radius: 22px; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45); border: 2px solid rgba(255, 247, 232, 0.2); }
+.install-lead { margin: 0; font-weight: 700; color: var(--cream); }
+.install-steps { list-style: none; counter-reset: step; margin: 4px 0; padding: 0; width: 100%; display: flex; flex-direction: column; gap: 8px; text-align: left; }
+.install-steps li { counter-increment: step; display: grid; grid-template-columns: 26px 40px 1fr; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 12px; background: rgba(14, 18, 20, 0.5); font-size: 15px; line-height: 1.35; }
+.install-steps li::before { content: counter(step); display: grid; place-items: center; width: 26px; height: 26px; border-radius: 50%; background: var(--gold); color: var(--ink); font: 800 14px var(--display); }
+.install-glyph { display: grid; place-items: center; width: 40px; height: 40px; border-radius: 10px; background: rgba(255, 247, 232, 0.1); color: #4aa3ff; }
+.install-glyph svg { width: 24px; height: 24px; }
+.install-glyph-text { font: 800 14px var(--display); color: #4aa3ff; }
+.install-note { margin: 0; font-size: 13px; opacity: 0.75; }
+@media (max-height: 460px) {
+  .modal-install { gap: 6px; padding-top: 16px; padding-bottom: 16px; }
+  .install-icon { width: 56px; height: 56px; border-radius: 13px; }
+  .install-steps li { padding: 6px 10px; font-size: 13px; }
+}
+/* Installed app: respect notches/home indicator on every edge. */
+@media (display-mode: standalone), (display-mode: fullscreen) {
+  body { background: var(--ink); }
+}
+/* Short landscape screens (phones): compact title so every button fits above the fold. */
+@media (max-height: 520px) {
+  .title-block { gap: 8px; top: calc(50% + var(--safe-t) / 2); transform: translateY(-50%); }
+  .logo { gap: 10px; }
+  .logo-gem { width: 44px; }
+  .logo-text { font-size: clamp(30px, 9.5vh, 46px); }
+  .tagline { display: none; }
+  .screen-title .menu { gap: 8px; }
+  .screen-title .menu .btn { min-width: 0; padding: 8px 20px; font-size: 16px; }
+  .screen-title .menu .btn-primary { min-width: 240px; padding: 10px 24px; font-size: 19px; }
+  .screen-title .menu .btn-shop { min-width: 240px; }
+  .screen-title .setup-row .btn, .screen-title .menu-sub .btn { padding: 6px 12px; font-size: 13px; }
+  .menu-sub { gap: 6px; max-width: 520px; }
+  .title-best { display: none; }
+}
+/* Touch devices: keyboard hints are noise. */
+@media (hover: none) and (pointer: coarse) {
+  .bottom-bar .prompts { display: none; }
+}
+@media (max-height: 520px) {
+  .modal-install { max-width: 640px; max-height: calc(100% - 16px); overflow: auto; gap: 6px; padding: 14px 20px 16px; }
+  .modal-install .modal-title { font-size: 28px; }
+  .modal-install .install-icon { display: none; }
+  .modal-install .install-lead { font-size: 14px; }
+  .modal-install .install-steps { gap: 5px; }
+  .modal-install .install-steps li { padding: 5px 10px; grid-template-columns: 22px 32px 1fr; font-size: 13px; }
+  .modal-install .install-steps li::before { width: 22px; height: 22px; font-size: 12px; }
+  .modal-install .install-glyph { width: 32px; height: 32px; }
+  .modal-install .install-glyph svg { width: 20px; height: 20px; }
+  .modal-install .install-note { font-size: 12px; }
+  .modal-install .menu .btn { padding: 8px 20px; font-size: 15px; }
+}

@@ -8,6 +8,7 @@ import type { Game } from './game/game'
 import { SKINS, skinById } from './game/magpies'
 import type { RunState } from './game/rules'
 import { Online, type BoardId } from './online/online'
+import { homeScreen } from './pwa/pwa'
 import { TouchControls } from './ui/touch'
 import { Ui } from './ui/ui'
 
@@ -79,6 +80,8 @@ async function boot(): Promise<void> {
     input.lockPointer()
   }
 
+  // Offline/home-screen support; a new version only reloads the page from the title screen.
+  homeScreen.init(() => document.getElementById('ui')?.dataset.activeScreen === 'title' && (!game || game.mode !== 'playing'))
   const ui = new Ui(i18n, save, audio, input, {
     play: () => void startRun(!save.data.tutorialDone),
     restart: () => void startRun(false),
@@ -87,6 +90,7 @@ async function boot(): Promise<void> {
       game?.toTitle()
       ui.show('title')
       input.unlockPointer()
+      homeScreen.safePoint()
     },
     settings: patch => {
       const qualityChanged = patch.quality !== undefined && patch.quality !== save.data.quality
