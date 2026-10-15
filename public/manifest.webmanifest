@@ -1,0 +1,19 @@
+{
+  "id": "./",
+  "name": "Magpie Sky Patrol",
+  "short_name": "MagSwoop",
+  "description": "Defend the nest! Swoop runners and cyclists as a flock of Australian magpies, complete with live-synthesised magpie carols.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "display_override": ["fullscreen", "standalone"],
+  "orientation": "landscape",
+  "background_color": "#15191c",
+  "theme_color": "#15191c",
+  "categories": ["games", "entertainment"],
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

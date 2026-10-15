@@ -7,9 +7,10 @@ import type { Hint, HudStatus, Point, PopupKind } from '../game/game'
 import { formatClock, stars, type RunState } from '../game/rules'
 import bootIcon from '../../assets/share/favicon.png'
 import { SKINS, VARIANTS, skinById } from '../game/magpies'
+import { homeScreen } from '../pwa/pwa'
 import { errorCode, formatPrice, type BoardId, type FeatherItemId, type Online, type ProductId } from '../online/online'
 
-export type Screen = 'boot' | 'title' | 'hud' | 'pause' | 'settings' | 'leaderboard' | 'results' | 'shop' | 'wardrobe' | 'account'
+export type Screen = 'boot' | 'title' | 'hud' | 'pause' | 'settings' | 'leaderboard' | 'results' | 'shop' | 'wardrobe' | 'account' | 'install'
 
 export type UiActions = {
   play(): void
@@ -39,6 +40,9 @@ const ICON = {
   feather: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 3C11 4 5 10 4 20l2 1c1-3 3-6 5-7l-2-1 5-1-2-1 5-3-3-1c3-1 5-2 6-4Z" fill="currentColor"/></svg>',
   lock: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="10" width="14" height="11" rx="2.5" fill="currentColor"/><path d="M8 10V7a4 4 0 0 1 8 0v3" fill="none" stroke="currentColor" stroke-width="2.4"/></svg>',
   crown: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 8l4.5 4L12 5l4.5 7L21 8l-2 11H5Z" fill="currentColor"/></svg>',
+  install: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="2" width="12" height="20" rx="2.5" fill="none" stroke="currentColor" stroke-width="2.2"/><path d="M12 6v8m-3.5-3.5L12 14l3.5-3.5" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/><circle cx="12" cy="18.5" r="1.1" fill="currentColor"/></svg>',
+  share: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12M7.5 7.5 12 3l4.5 4.5" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/><path d="M8 11H6.5A1.5 1.5 0 0 0 5 12.5v7A1.5 1.5 0 0 0 6.5 21h11a1.5 1.5 0 0 0 1.5-1.5v-7a1.5 1.5 0 0 0-1.5-1.5H16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>',
+  addbox: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="3.5" width="17" height="17" rx="3.5" fill="none" stroke="currentColor" stroke-width="2.2"/><path d="M12 8v8M8 12h8" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>',
   user: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="4.2" fill="currentColor"/><path d="M3.5 21c1.2-4.6 4.4-7 8.5-7s7.3 2.4 8.5 7Z" fill="currentColor"/></svg>',
 }
 
@@ -83,6 +87,7 @@ export class Ui {
     this.root = document.getElementById('ui')!
     this.root.innerHTML = this.template()
     this.root.addEventListener('click', e => this.onClick(e))
+    homeScreen.onChange(() => this.renderInstall())
     this.root.addEventListener('input', e => this.onInput(e))
     this.root.addEventListener('focusin', e => {
       if ((e.target as HTMLElement).matches('.btn, .seg button, .toggle')) this.audio.play('ui')
@@ -123,6 +128,7 @@ export class Ui {
     if (screen === 'title') {
       this.renderBest()
       this.renderSetup()
+      this.renderInstall()
     }
     if (screen === 'leaderboard') this.renderLeaderboard()
     if (screen === 'shop') {
@@ -381,6 +387,10 @@ export class Ui {
   }
 
   /** Mode and location buttons on the title screen (Season+ options show a lock). */
+  /** Show "Install app" only where installing is possible and the game isn't installed yet. */
+  private renderInstall(): void {
+    this.root.querySelector('.btn-install')?.classList.toggle('is-hidden', homeScreen.kind === 'none')
+  }
   private renderSetup(): void {
     const d = this.save.data
     const plus = this.online.seasonPlus
@@ -624,6 +634,10 @@ export class Ui {
       case 'pause': window.dispatchEvent(new CustomEvent('game:pause')); break
       case 'shop': this.flash(''); this.push('shop'); break
       case 'wardrobe': this.push('wardrobe'); break
+      case 'install':
+        if (homeScreen.kind === 'native') void homeScreen.promptInstall().then(() => this.renderInstall())
+        else this.push('install')
+        break
       case 'account': this.flash(''); if (this.online.offline) break; this.push('account'); break
       case 'login': this.online.login(); break
       case 'logout': void this.run(() => this.online.logout()); break
@@ -809,6 +823,7 @@ export class Ui {
         <button data-nav class="btn btn-small" data-action="wardrobe"><span data-i18n="menu.wardrobe"></span></button>
         <button data-nav class="btn btn-small" data-action="leaderboard"><span data-i18n="menu.leaderboard"></span></button>
         <button data-nav class="btn btn-small" data-action="settings"><span data-i18n="menu.settings"></span></button>
+        <button data-nav class="btn btn-small btn-install is-hidden" data-action="install">${ICON.install}<span data-i18n="menu.install"></span></button>
       </div>
     </nav>
   </div>
@@ -917,6 +932,21 @@ export class Ui {
   <footer class="bottom-bar"><div class="prompts"></div></footer>
 </section>
 
+<section class="screen screen-install screen-modal" data-screen="install">
+  <div class="modal modal-install">
+    <img class="install-icon" src="./icons/icon-192.png" alt="" width="96" height="96" />
+    <h2 class="modal-title" data-i18n="install.title"></h2>
+    <p class="install-lead" data-i18n="install.lead"></p>
+    <ol class="install-steps">
+      <li><span class="install-glyph">${ICON.share}</span><span data-i18n="install.step1"></span></li>
+      <li><span class="install-glyph">${ICON.addbox}</span><span data-i18n="install.step2"></span></li>
+      <li><span class="install-glyph install-glyph-text">Add</span><span data-i18n="install.step3"></span></li>
+    </ol>
+    <p class="install-note" data-i18n="install.note"></p>
+    <nav class="menu menu-row"><button data-nav class="btn" data-action="back"><span data-i18n="menu.back"></span></button></nav>
+  </div>
+  <footer class="bottom-bar"><div class="prompts"></div></footer>
+</section>
 <section class="screen screen-account screen-modal" data-screen="account">
   <div class="modal modal-wide modal-store">
     <h2 class="modal-title" data-i18n="account.title"></h2>

@@ -202,5 +202,12 @@
   "skin.crested": "Crested",
   "skin.aurora": "Aurora",
   "skin.sunset": "Sunset",
-  "skin.frost": "Frost"
+  "skin.frost": "Frost",
+  "menu.install": "Install app",
+  "install.title": "Add to Home Screen",
+  "install.lead": "Play MagSwoop like an app: its own icon, full screen, and it works offline.",
+  "install.step1": "Tap the Share button in Safari's toolbar (bottom on iPhone, top on iPad).",
+  "install.step2": "Scroll down and choose “Add to Home Screen”.",
+  "install.step3": "Tap Add, then open MagSwoop from your home screen.",
+  "install.note": "Your scores, skins and purchases stay with your account if you log in."
 }

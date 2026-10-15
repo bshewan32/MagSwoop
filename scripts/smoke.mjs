@@ -12,7 +12,7 @@ mkdirSync(out, { recursive: true })
 
 const server = spawn(process.execPath, ['node_modules/vite/bin/vite.js', 'preview', '--port', String(port), '--strictPort', '--host', '127.0.0.1'], { stdio: 'ignore', detached: false })
 let browser
-const guard = setTimeout(() => fail('timed out'), 120_000)
+const guard = setTimeout(() => fail('timed out'), 280_000)
 
 function cleanup() {
   clearTimeout(guard)
@@ -214,6 +214,45 @@ try {
   await phonePage.waitForTimeout(1500)
   await phonePage.screenshot({ path: `${out}/08-phone-hud.png` })
   await phone.close()
+
+  // Home screen: iPhone Safari shows "Install app" with Add to Home Screen steps.
+  const iphoneUa = 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1'
+  const iphone = await browser.newContext({ viewport: { width: 844, height: 390 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true, userAgent: iphoneUa, locale: 'en-AU' })
+  const iphonePage = await openGame(iphone, errors)
+  await iphonePage.waitForSelector('.btn-install:not(.is-hidden)', { timeout: 10_000 })
+  await iphonePage.tap('.btn-install')
+  await iphonePage.waitForSelector('[data-screen="install"].is-active')
+  await iphonePage.waitForTimeout(400)
+  await iphonePage.screenshot({ path: `${out}/14-install-ios.png` })
+  const manifest = await iphonePage.evaluate(async () => {
+    const href = document.querySelector('link[rel="manifest"]')?.getAttribute('href')
+    const m = await (await fetch(href)).json()
+    const icons = await Promise.all(m.icons.map(async i => (await fetch(i.src)).ok))
+    const apple = (await fetch(document.querySelector('link[rel="apple-touch-icon"]').getAttribute('href'))).ok
+    return { name: m.short_name, display: m.display, icons, apple }
+  })
+  if (manifest.name !== 'MagSwoop' || !manifest.icons.every(Boolean) || !manifest.apple) throw new Error(`bad manifest/icons: ${JSON.stringify(manifest)}`)
+  await iphone.close()
+
+  // Offline: after one visit the service worker caches the game, so it relaunches with no network.
+  const desk = await browser.newContext({ viewport: { width: 1280, height: 720 } })
+  const deskPage = await openGame(desk, errors)
+  await deskPage.evaluate(async () => {
+    const reg = await navigator.serviceWorker.ready
+    if (!reg.active) throw new Error('service worker did not activate')
+  })
+  await deskPage.waitForTimeout(1500)
+  await desk.setOffline(true)
+  const offlineErrors = [] // API calls fail offline by design; only the game booting matters here.
+  const offlinePage = await openGame(desk, offlineErrors)
+  await offlinePage.click('[data-action="play"]')
+  await offlinePage.waitForSelector('[data-screen="hud"].is-active')
+  await offlinePage.waitForTimeout(1200)
+  const off = await offlinePage.evaluate(() => ({ mode: window.__game.game.mode, people: window.__game.game.crowd.people.length }))
+  if (off.mode !== 'playing') throw new Error(`offline relaunch did not play: ${JSON.stringify(off)}`)
+  await offlinePage.screenshot({ path: `${out}/15-offline.png` })
+  console.log(`smoke: offline relaunch OK (${off.people} people), install prompt OK`)
+  await desk.close()
   if (errors.length) throw new Error(`console errors:\n  ${errors.join('\n  ')}`)
   await browser.close()
   cleanup()
