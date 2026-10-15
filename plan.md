@@ -48,3 +48,9 @@ Authentication, online leaderboards, multiplayer, and persistent online services
 - Backend: entitlements/wallet/orders/subscriptions (provider-neutral for a later Steam move), cloud saves, Classic + Endless leaderboards (all-time and weekly), purchase history and membership management.
 - Season+ content: Beach Esplanade map (surfers, e-scooter riders, Norfolk pines, surf club) and Endless mode with egg restocks.
 - Steam later: add a Steam adapter beside `server/shop/stripe.mjs` (Steam microtransactions are required on Steam) and keep the entitlements table.
+
+## Update: home-screen app (2026-10-15)
+
+- Installable from Safari (Add to Home Screen) and Chrome/Edge/Android (native prompt) with an in-game Install button.
+- Full-screen standalone mode, new app icon set, offline play via a build-generated service worker; updates apply only on the title screen.
+- Compact title layout for landscape phones.
