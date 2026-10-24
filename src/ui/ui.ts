@@ -451,10 +451,10 @@ export class Ui {
       ${gate}
       ${gate ? '' : `<p class="shop-note">${esc(this.i18n.t('shop.noLogin'))}</p>`}
       <div class="products">${cards || `<p class="board-empty">${esc(this.i18n.t(o.offline ? 'online.offline' : 'online.loading'))}</p>`}</div>
-      <h3 class="shop-sub">${ICON.feather}<span>${esc(this.i18n.t('shop.featherShop'))}</span>${o.signedIn ? `<b class="shop-balance">${o.state.feathers.toLocaleString('en')}</b>` : ''}</h3>
+      <h3 class="shop-sub">${ICON.feather}<span>${esc(this.i18n.t('shop.featherShop'))}</span><b class="shop-balance">${o.state.feathers.toLocaleString('en')}</b></h3>
       <p class="shop-note">${esc(this.i18n.t('shop.earn'))}</p>
       <div class="feather-items">${items}</div>
-      <p class="shop-note shop-test">${esc(this.i18n.t('shop.testMode'))}</p>`
+      ${cat?.testMode ? `<p class="shop-note shop-test">${esc(this.i18n.t('shop.testMode'))}</p>` : ''}`
     this.flash(this.shopMessage, this.shopTone)
   }
 

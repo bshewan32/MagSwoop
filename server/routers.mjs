@@ -39,6 +39,8 @@ const shop = router({
     products: Object.entries(PRODUCTS).map(([id, p]) => ({ id, kind: p.kind, name: p.name, description: p.description, amount: p.amount, interval: p.interval ?? null })),
     featherItems: Object.entries(FEATHER_ITEMS).map(([id, i]) => ({ id, cost: i.cost })),
     paymentsEnabled: !!process.env.STRIPE_SECRET_KEY,
+    // Only test keys (sk_test_/rk_test_) show the test-card hint; live keys never do.
+    testMode: /^(sk|rk)_test_/.test(process.env.STRIPE_SECRET_KEY ?? ''),
   })),
   state: playerProcedure.query(({ ctx }) => guard(() => store.playerState(ctx.player.id))),
   checkout: playerProcedure
