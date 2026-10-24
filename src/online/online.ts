@@ -11,7 +11,7 @@ import { api, normaliseCode, restoreCode, setRestoreCode } from './guest'
 export type ProductId = 'skins_pack' | 'season_plus' | 'feathers_500' | 'swoop_club'
 export type FeatherItemId = 'skin_albino' | 'skin_golden' | 'skin_night' | 'bonus_egg'
 export type Product = { id: ProductId; kind: 'one_time' | 'consumable' | 'subscription'; name: string; description: string; amount: number; interval: string | null }
-export type Catalog = { currency: string; products: Product[]; featherItems: { id: FeatherItemId; cost: number }[]; paymentsEnabled: boolean }
+export type Catalog = { currency: string; products: Product[]; featherItems: { id: FeatherItemId; cost: number }[]; paymentsEnabled: boolean; testMode?: boolean }
 export type Membership = { active: boolean; status: string; renewsAt: string | null; cancelAtPeriodEnd: boolean }
 export type PlayerState = { owned: string[]; feathers: number; bonusEggs: number; membership: Membership; monthlySkin: string }
 export type Order = { id: number; product: string; name: string; kind: string; status: 'paid' | 'failed' | 'processing'; amount: number | null; currency: string; at: string }
