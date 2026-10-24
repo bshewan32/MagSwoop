@@ -7,7 +7,9 @@ import { FEATHER_ITEMS, PRODUCTS, CURRENCY } from './shop/products.mjs'
 import * as store from './shop/store.mjs'
 import * as payments from './shop/stripe.mjs'
 
-// Ownership always comes from ctx.user (the signed-in Manus account), never from browser input.
+// Ownership never comes from browser input. Shop purchases belong to the device's guest identity
+// (ctx.guest, from the secret restore code header); Manus login (ctx.user) is optional and only
+// used for leaderboards and cloud saves.
 
 const TRPC_CODES = { 400: 'BAD_REQUEST', 401: 'UNAUTHORIZED', 403: 'FORBIDDEN', 404: 'NOT_FOUND', 409: 'CONFLICT', 413: 'PAYLOAD_TOO_LARGE', 503: 'INTERNAL_SERVER_ERROR' }
 async function guard(fn) {
@@ -20,6 +22,11 @@ async function guard(fn) {
     throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'server_error' })
   }
 }
+/** Requires the X-Guest-Token restore code; exposes it as ctx.player. */
+const playerProcedure = publicProcedure.use(({ ctx, next }) => {
+  if (!ctx.guest) throw new TRPCError({ code: 'UNAUTHORIZED', message: 'guest_required' })
+  return next({ ctx: { ...ctx, player: ctx.guest } })
+})
 const requestHost = ctx => ctx.req.headers['x-forwarded-host'] || ctx.req.headers.host
 const productId = z.enum(Object.keys(PRODUCTS))
 const requestId = z.string().regex(/^[A-Za-z0-9_-]{8,64}$/)
@@ -33,34 +40,34 @@ const shop = router({
     featherItems: Object.entries(FEATHER_ITEMS).map(([id, i]) => ({ id, cost: i.cost })),
     paymentsEnabled: !!process.env.STRIPE_SECRET_KEY,
   })),
-  state: protectedProcedure.query(({ ctx }) => guard(() => store.playerState(ctx.user.id))),
-  checkout: protectedProcedure
+  state: playerProcedure.query(({ ctx }) => guard(() => store.playerState(ctx.player.id))),
+  checkout: playerProcedure
     .input(z.object({ product: productId, returnUrl: z.string().max(2048) }).strict())
-    .mutation(({ ctx, input }) => guard(() => payments.createCheckout(ctx.user, input.product, input.returnUrl, requestHost(ctx)))),
-  orderStatus: protectedProcedure
+    .mutation(({ ctx, input }) => guard(() => payments.createCheckout(ctx.player, input.product, input.returnUrl, requestHost(ctx)))),
+  orderStatus: playerProcedure
     .input(z.object({ sessionId: z.string().regex(/^cs_[A-Za-z0-9_]+$/) }).strict())
-    .query(({ ctx, input }) => guard(() => store.orderStatus(ctx.user.id, input.sessionId))),
-  orders: protectedProcedure.query(({ ctx }) => guard(() => store.listOrders(ctx.user.id))),
-  spend: protectedProcedure
+    .query(({ ctx, input }) => guard(() => store.orderStatus(ctx.player.id, input.sessionId))),
+  orders: playerProcedure.query(({ ctx }) => guard(() => store.listOrders(ctx.player.id))),
+  spend: playerProcedure
     .input(z.object({ item: z.enum(Object.keys(FEATHER_ITEMS)), requestId }).strict())
-    .mutation(({ ctx, input }) => guard(async () => ({ applied: await store.spendFeathers(ctx.user.id, input.item, input.requestId), state: await store.playerState(ctx.user.id) }))),
-  useBonusEgg: protectedProcedure
+    .mutation(({ ctx, input }) => guard(async () => ({ applied: await store.spendFeathers(ctx.player.id, input.item, input.requestId), state: await store.playerState(ctx.player.id) }))),
+  useBonusEgg: playerProcedure
     .input(z.object({ requestId }).strict())
-    .mutation(({ ctx, input }) => guard(async () => ({ applied: await store.useBonusEgg(ctx.user.id, input.requestId) }))),
-  claimRunFeathers: protectedProcedure
+    .mutation(({ ctx, input }) => guard(async () => ({ applied: await store.useBonusEgg(ctx.player.id, input.requestId) }))),
+  claimRunFeathers: playerProcedure
     .input(z.object({ runId: z.string().uuid() }).strict())
-    .mutation(({ ctx, input }) => guard(() => store.claimRunFeathers(ctx.user.id, input.runId))),
-  cancelMembership: protectedProcedure.mutation(({ ctx }) => guard(async () => {
-    await payments.setMembershipCancel(ctx.user.id, true)
-    return store.playerState(ctx.user.id)
+    .mutation(({ ctx, input }) => guard(() => store.claimRunFeathers(ctx.user?.id ?? null, ctx.player.id, input.runId))),
+  cancelMembership: playerProcedure.mutation(({ ctx }) => guard(async () => {
+    await payments.setMembershipCancel(ctx.player.id, true)
+    return store.playerState(ctx.player.id)
   })),
-  resumeMembership: protectedProcedure.mutation(({ ctx }) => guard(async () => {
-    await payments.setMembershipCancel(ctx.user.id, false)
-    return store.playerState(ctx.user.id)
+  resumeMembership: playerProcedure.mutation(({ ctx }) => guard(async () => {
+    await payments.setMembershipCancel(ctx.player.id, false)
+    return store.playerState(ctx.player.id)
   })),
-  billingPortal: protectedProcedure
+  billingPortal: playerProcedure
     .input(z.object({ returnUrl: z.string().max(2048) }).strict())
-    .mutation(({ ctx, input }) => guard(() => payments.billingPortal(ctx.user.id, input.returnUrl, requestHost(ctx)))),
+    .mutation(({ ctx, input }) => guard(() => payments.billingPortal(ctx.player.id, input.returnUrl, requestHost(ctx)))),
 })
 
 const save = router({

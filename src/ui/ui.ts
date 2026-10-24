@@ -378,7 +378,7 @@ export class Ui {
       chip.innerHTML = `${ICON.user}<span class="chip-name"></span>${o.state.membership.active ? `<span class="badge-club">${ICON.crown}</span>` : ''}<span class="chip-feathers">${ICON.feather}<b>${o.state.feathers.toLocaleString('en')}</b></span>`
       chip.querySelector('.chip-name')!.textContent = o.session.user?.name ?? this.i18n.t('account.player')
     } else {
-      chip.innerHTML = `${ICON.user}<span>${esc(this.i18n.t('account.login'))}</span>`
+      chip.innerHTML = `${ICON.user}<span>${esc(this.i18n.t('account.title'))}</span>${o.state.membership.active ? `<span class="badge-club">${ICON.crown}</span>` : ''}<span class="chip-feathers">${ICON.feather}<b>${o.state.feathers.toLocaleString('en')}</b></span>`
     }
     if (this.screen === 'title') this.renderSetup()
     if (this.screen === 'shop') this.renderShop()
@@ -419,7 +419,6 @@ export class Ui {
   private storeGate(): string {
     const o = this.online
     if (o.offline) return `<div class="store-gate"><p>${esc(this.i18n.t('online.offline'))}</p></div>`
-    if (!o.signedIn) return `<div class="store-gate"><p>${esc(this.i18n.t('shop.loginToBuy'))}</p><button data-nav class="btn btn-small btn-primary" data-action="login"><span>${esc(this.i18n.t('account.login'))}</span></button></div>`
     if (o.embedded) return `<div class="store-gate"><p>${esc(this.i18n.t('shop.openTab'))}</p><button data-nav class="btn btn-small btn-primary" data-action="standalone"><span>${esc(this.i18n.t('shop.openTabButton'))}</span></button></div>`
     if (o.catalog && !o.catalog.paymentsEnabled) return `<div class="store-gate"><p>${esc(this.i18n.t('shop.unavailable'))}</p></div>`
     return ''
@@ -450,6 +449,7 @@ export class Ui {
     }).join('')
     this.q('.shop-body').innerHTML = `
       ${gate}
+      ${gate ? '' : `<p class="shop-note">${esc(this.i18n.t('shop.noLogin'))}</p>`}
       <div class="products">${cards || `<p class="board-empty">${esc(this.i18n.t(o.offline ? 'online.offline' : 'online.loading'))}</p>`}</div>
       <h3 class="shop-sub">${ICON.feather}<span>${esc(this.i18n.t('shop.featherShop'))}</span>${o.signedIn ? `<b class="shop-balance">${o.state.feathers.toLocaleString('en')}</b>` : ''}</h3>
       <p class="shop-note">${esc(this.i18n.t('shop.earn'))}</p>
@@ -500,23 +500,28 @@ export class Ui {
     }
     const body = o.offline
       ? `<p class="store-gate">${esc(this.i18n.t('online.offline'))}</p>`
-      : !o.signedIn
-        ? `<div class="store-gate"><p>${esc(this.i18n.t('account.why'))}</p><button data-nav class="btn btn-primary" data-action="login"><span>${esc(this.i18n.t('account.login'))}</span></button></div>`
-        : `<div class="account-grid">
+      : `<div class="account-grid">
             <section><h3>${ICON.user}<span class="acct-name"></span></h3>
               <dl class="acct-stats"><div><dt>${esc(this.i18n.t('account.feathers'))}</dt><dd>${ICON.feather}${o.state.feathers.toLocaleString('en')}</dd></div><div><dt>${esc(this.i18n.t('account.bonusEggs'))}</dt><dd>${o.state.bonusEggs}</dd></div><div><dt>${esc(this.i18n.t('account.seasonPlus'))}</dt><dd>${esc(this.i18n.t(o.seasonPlus ? 'account.yes' : 'account.no'))}</dd></div></dl>
-              <div class="menu menu-row"><button data-nav class="btn btn-small" data-action="restore"><span>${esc(this.i18n.t('account.restore'))}</span></button><button data-nav class="btn btn-small" data-action="logout"><span>${esc(this.i18n.t('account.logout'))}</span></button></div></section>
+              <div class="restore-box"><p>${esc(this.i18n.t('account.codeWhy'))}</p>
+                <div class="restore-code"><code></code><button data-nav class="btn btn-small" data-action="copy-code"><span>${esc(this.i18n.t('account.copy'))}</span></button></div>
+                <div class="restore-use"><input class="restore-input" type="text" inputmode="text" autocomplete="off" spellcheck="false" maxlength="32" placeholder="MAG-XXXX-XXXX-XXXX-XXXX" aria-label="${esc(this.i18n.t('account.enterCode'))}"><button data-nav class="btn btn-small" data-action="use-code"><span>${esc(this.i18n.t('account.useCode'))}</span></button></div></div>
+              <div class="menu menu-row"><button data-nav class="btn btn-small" data-action="restore"><span>${esc(this.i18n.t('account.restore'))}</span></button>${o.signedIn
+                ? `<button data-nav class="btn btn-small" data-action="logout"><span>${esc(this.i18n.t('account.logout'))}</span></button>`
+                : `<button data-nav class="btn btn-small" data-action="login"><span>${esc(this.i18n.t('account.loginBoards'))}</span></button>`}</div></section>
             <section><h3>${ICON.crown}<span>${esc(this.i18n.t('club.title'))}</span></h3>${club}</section>
             <section class="acct-orders"><h3><span>${esc(this.i18n.t('account.purchases'))}</span></h3><ol class="orders"><li class="board-empty">${esc(this.i18n.t('online.loading'))}</li></ol></section>
           </div>`
     this.q('.account-body').innerHTML = body + `<p class="store-message" data-tone=""></p>`
     const n = this.root.querySelector('.acct-name')
     if (n) n.textContent = o.session.user?.name ?? this.i18n.t('account.player')
+    const codeEl = this.root.querySelector('.restore-code code')
+    if (codeEl) codeEl.textContent = o.restoreCode
     this.flash(this.shopMessage, this.shopTone)
   }
 
   private async loadOrders(): Promise<void> {
-    if (!this.online.signedIn) return
+    if (this.online.offline) return
     try {
       const orders = await this.online.orders()
       const list = this.root.querySelector('.orders')
@@ -561,7 +566,7 @@ export class Ui {
 
   private equip(bird: number, skin: string | null): void {
     if (skin && !this.online.owns(skin)) {
-      this.flash(this.online.signedIn ? 'wardrobe.getIt' : 'shop.loginToBuy', 'bad')
+      this.flash('wardrobe.getIt', 'bad')
       this.push('shop')
       return
     }
@@ -643,6 +648,22 @@ export class Ui {
       case 'logout': void this.run(() => this.online.logout()); break
       case 'standalone': this.online.openStandalone(); break
       case 'restore': void this.run(() => this.online.refresh(), 'account.restored'); break
+      case 'copy-code': {
+        const code = this.online.restoreCode
+        void navigator.clipboard?.writeText(code).then(() => this.flash('account.copied', 'good'), () => this.flash('account.copyFailed', 'bad'))
+        break
+      }
+      case 'use-code': {
+        const input = this.root.querySelector<HTMLInputElement>('.restore-input')
+        const raw = input?.value ?? ''
+        void this.online.useRestoreCode(raw).then(ok => {
+          if (!ok) return this.flash('account.badCode', 'bad')
+          this.renderAccount()
+          void this.loadOrders()
+          this.flash('account.codeUsed', 'good')
+        })
+        break
+      }
       case 'buy': void this.run(() => this.online.checkout(target.dataset.product as ProductId)); break
       case 'spend': {
         if (target.dataset.short) { this.flash('error.not_enough_feathers', 'bad'); break }

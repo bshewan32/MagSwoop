@@ -1,6 +1,7 @@
 import { ManusAuth, type ManusSession } from '../../manus-auth.js'
 import { createLeaderboardClient, type LeaderboardClient, type RunTicket } from '../../leaderboard.js'
 import type { SaveData } from '../engine/save'
+import { api, normaliseCode, restoreCode, setRestoreCode } from './guest'
 
 /**
  * Online layer: Manus account session, shop/entitlements, Stripe Checkout round trip, cloud save
@@ -80,9 +81,7 @@ export class Online extends EventTarget {
   async prepare(): Promise<void> {
     window.addEventListener('manus-auth-change', e => {
       this.session = e.detail
-      if (!this.signedIn) this.state = EMPTY
       this.changed()
-      if (this.signedIn) void this.refresh()
     })
     try {
       this.session = await ManusAuth.prepare()
@@ -91,13 +90,13 @@ export class Online extends EventTarget {
     }
     this.changed()
     void this.loadCatalog()
-    if (this.signedIn) await this.refresh()
+    if (!this.offline) await this.refresh()
   }
 
   async loadCatalog(): Promise<Catalog | null> {
     if (this.catalog || this.offline) return this.catalog
     try {
-      this.catalog = await ManusAuth.query<Catalog>('shop.catalog')
+      this.catalog = await api.query<Catalog>('shop.catalog')
       this.changed()
     } catch {
       this.catalog = null
@@ -106,9 +105,9 @@ export class Online extends EventTarget {
   }
 
   async refresh(): Promise<void> {
-    if (!this.signedIn) return
+    if (this.offline) return
     try {
-      this.state = await ManusAuth.query<PlayerState>('shop.state')
+      this.state = await api.query<PlayerState>('shop.state')
       this.changed()
     } catch {
       // Keep the last known state; the UI shows what it has.
@@ -122,8 +121,22 @@ export class Online extends EventTarget {
 
   async logout(): Promise<void> {
     this.session = await ManusAuth.logout()
-    this.state = EMPTY
     this.changed()
+  }
+
+  /** This device's purchase restore code (created on first use). */
+  get restoreCode(): string {
+    return restoreCode()
+  }
+
+  /** Switch this device to another restore code, e.g. from a receipt. Returns false if invalid. */
+  async useRestoreCode(raw: string): Promise<boolean> {
+    const code = normaliseCode(raw)
+    if (!code) return false
+    setRestoreCode(code)
+    await this.refresh()
+    this.changed()
+    return true
   }
 
   openStandalone(): void {
@@ -133,7 +146,7 @@ export class Online extends EventTarget {
   /** Create a Stripe Checkout Session and send the player there (top-level page only). */
   async checkout(product: ProductId): Promise<void> {
     const returnUrl = `${location.origin}${location.pathname}`
-    const { url } = await ManusAuth.mutate<{ url: string; sessionId: string }>('shop.checkout', { product, returnUrl })
+    const { url } = await api.mutate<{ url: string; sessionId: string }>('shop.checkout', { product, returnUrl })
     location.assign(url)
   }
 
@@ -159,7 +172,7 @@ export class Online extends EventTarget {
     let wait = 1000
     while (Date.now() < until) {
       try {
-        const r = await ManusAuth.query<{ status: string }>('shop.orderStatus', { sessionId })
+        const r = await api.query<{ status: string }>('shop.orderStatus', { sessionId })
         if (r.status === 'paid' || r.status === 'failed') {
           await this.refresh()
           return r.status
@@ -175,20 +188,20 @@ export class Online extends EventTarget {
   }
 
   async orders(): Promise<Order[]> {
-    return ManusAuth.query<Order[]>('shop.orders')
+    return api.query<Order[]>('shop.orders')
   }
 
   async spend(item: FeatherItemId): Promise<void> {
-    const r = await ManusAuth.mutate<{ applied: boolean; state: PlayerState }>('shop.spend', { item, requestId: requestId() })
+    const r = await api.mutate<{ applied: boolean; state: PlayerState }>('shop.spend', { item, requestId: requestId() })
     this.state = r.state
     this.changed()
   }
 
   /** Consume one bonus egg for the run about to start. Resolves false when none could be used. */
   async useBonusEgg(): Promise<boolean> {
-    if (!this.signedIn || this.state.bonusEggs < 1) return false
+    if (this.state.bonusEggs < 1) return false
     try {
-      const r = await ManusAuth.mutate<{ applied: boolean }>('shop.useBonusEgg', { requestId: requestId() })
+      const r = await api.mutate<{ applied: boolean }>('shop.useBonusEgg', { requestId: requestId() })
       this.state = { ...this.state, bonusEggs: Math.max(0, this.state.bonusEggs - 1) }
       this.changed()
       return r.applied
@@ -198,12 +211,12 @@ export class Online extends EventTarget {
   }
 
   async setMembershipCancel(cancel: boolean): Promise<void> {
-    this.state = await ManusAuth.mutate<PlayerState>(cancel ? 'shop.cancelMembership' : 'shop.resumeMembership')
+    this.state = await api.mutate<PlayerState>(cancel ? 'shop.cancelMembership' : 'shop.resumeMembership')
     this.changed()
   }
 
   async billingPortal(): Promise<void> {
-    const { url } = await ManusAuth.mutate<{ url: string }>('shop.billingPortal', { returnUrl: `${location.origin}${location.pathname}` })
+    const { url } = await api.mutate<{ url: string }>('shop.billingPortal', { returnUrl: `${location.origin}${location.pathname}` })
     location.assign(url)
   }
 
@@ -261,7 +274,7 @@ export class Online extends EventTarget {
     if (!r || !r.ok) return { ok: false, feathers: 0, error: r && !r.ok ? r.error : 'network' }
     let feathers = 0
     try {
-      const claim = await ManusAuth.mutate<{ feathers: number }>('shop.claimRunFeathers', { runId: r.value.receipt.runId })
+      const claim = await api.mutate<{ feathers: number }>('shop.claimRunFeathers', { runId: r.value.receipt.runId })
       feathers = claim.feathers
       await this.refresh()
     } catch {

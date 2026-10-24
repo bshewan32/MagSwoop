@@ -1,17 +1,19 @@
-// E2E: create a throwaway test user, open real Stripe Checkout (test mode), pay with 4242…,
+// E2E: create a throwaway guest buyer (no login, no email on file), open real Stripe Checkout (test mode), pay with 4242…,
 // then wait for the signed webhook (delivered to the preview origin) to fulfil the order.
 import mysql from 'mysql2/promise'
 import { chromium } from '../node_modules/playwright/index.mjs'
 import * as payments from './shop/stripe.mjs'
 import * as store from './shop/store.mjs'
+import { guestUser } from './shop/guest.mjs'
 
 const PREVIEW = 'https://8328-ixkhv8as4c13k4v6a3fid-951dc2b0.sg2.manus.computer/'
 const product = process.argv[2] ?? 'skins_pack'
 const conn = await mysql.createConnection({ uri: process.env.DATABASE_URL })
-const openId = `e2e-test-${Date.now()}`
-const [r] = await conn.execute('INSERT INTO users (openId, name, email, loginMethod) VALUES (?, ?, ?, ?)', [openId, 'E2E Tester', 'e2e-tester@example.com', 'test'])
-const user = { id: r.insertId, name: 'E2E Tester', email: 'e2e-tester@example.com' }
-console.log('test user', user.id)
+const A = '0123456789ABCDEFGHJKMNPQRSTVWXYZ'
+const body = Array.from(crypto.getRandomValues(new Uint8Array(16)), b => A[b & 31]).join('')
+const code = `MAG-${body.slice(0, 4)}-${body.slice(4, 8)}-${body.slice(8, 12)}-${body.slice(12, 16)}`
+const user = await guestUser(code)
+console.log('guest user', user.id, 'restore code', code)
 let ok = false
 try {
   const { url, sessionId } = await payments.createCheckout(user, product, PREVIEW, null)
@@ -23,6 +25,11 @@ try {
   // Card may sit behind an accordion button on newer Checkout pages.
   const cardBtn = page.locator('[data-testid="card-accordion-item-button"]')
   if (await cardBtn.count()) await cardBtn.click().catch(() => {})
+  const email = page.locator('#email')
+  await email.waitFor({ timeout: 30000 })
+  await email.fill('e2e-guest@example.com')
+  const note = await page.getByText(code).count()
+  console.log('restore code shown on Checkout page:', note > 0)
   await fill('#cardNumber', '4242424242424242')
   await fill('#cardExpiry', '12 / 34')
   await fill('#cardCvc', '123')
