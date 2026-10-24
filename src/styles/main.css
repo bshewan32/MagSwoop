@@ -644,3 +644,11 @@ body.has-touch .hud-flock .flock-info b { font-size: 11px; }
   .modal-install .install-note { font-size: 12px; }
   .modal-install .menu .btn { padding: 8px 20px; font-size: 15px; }
 }
+
+/* Guest restore code (no-login purchases) */
+.shop-note { margin: 0.4rem 0 0; font-size: 0.82rem; opacity: 0.8; text-align: center; }
+.restore-box { margin: 0.6rem 0; padding: 0.6rem 0.7rem; border-radius: 12px; background: rgba(255, 255, 255, 0.06); }
+.restore-box p { margin: 0 0 0.5rem; font-size: 0.82rem; line-height: 1.35; opacity: 0.85; }
+.restore-code, .restore-use { display: flex; gap: 0.5rem; align-items: center; margin-top: 0.4rem; }
+.restore-code code { flex: 1; font-family: ui-monospace, Menlo, monospace; font-size: 0.95rem; letter-spacing: 0.04em; color: var(--accent, #ffcf4a); user-select: all; word-break: break-all; }
+.restore-input { flex: 1; min-width: 0; padding: 0.45rem 0.6rem; border-radius: 8px; border: 1px solid rgba(255, 255, 255, 0.25); background: rgba(0, 0, 0, 0.25); color: inherit; font: inherit; font-size: 0.85rem; text-transform: uppercase; }

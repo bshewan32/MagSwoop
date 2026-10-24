@@ -2,6 +2,22 @@ import express from 'express'
 import { createExpressMiddleware } from '@trpc/server/adapters/express'
 import { registerOAuthRoutes, createContext, webdevRouter, router, publicPlatformConfig } from './webdev-adapter.mjs'
 import { webhook as stripeWebhook } from './shop/stripe.mjs'
+import { guestUser } from './shop/guest.mjs'
+
+/** Platform session (Manus login, optional) plus the device's guest identity for the shop. */
+async function gameContext(opts) {
+  const ctx = await createContext(opts)
+  let guest = null
+  const header = opts.req.headers['x-guest-token']
+  if (typeof header === 'string' && header.length < 64) {
+    try {
+      guest = await guestUser(header)
+    } catch {
+      guest = null
+    }
+  }
+  return { ...ctx, guest }
+}
 
 export function createGameApp(gameRouter, { leaderboard } = {}) {
   const app = express()
@@ -31,7 +47,7 @@ export function createGameApp(gameRouter, { leaderboard } = {}) {
     next()
   }, createExpressMiddleware({
     router: router({ webdev: webdevRouter, game: gameRouter }),
-    createContext,
+    createContext: gameContext,
   }))
   // Stripe webhooks belong outside /api/trpc. Register the application's
   // signature-verified raw-body handler before any JSON body parser.

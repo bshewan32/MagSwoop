@@ -126,12 +126,13 @@ export async function useBonusEgg(userId, requestId) {
  * Award feathers for a run this player submitted to the online leaderboard. The score is read from
  * the server's run record (owned by this account), never from the request; one award per run.
  */
-export async function claimRunFeathers(userId, runId) {
+export async function claimRunFeathers(runOwnerId, userId, runId) {
+  if (!runOwnerId) throw new StoreError('login_required', 401)
   const [rows] = await db().execute(
     `SELECT r.score FROM game_lb_runs r
        JOIN game_lb_accounts a ON a.namespace = r.namespace AND a.player_id = r.player_id
       WHERE r.namespace = 'production' AND r.id = ? AND a.user_id = ? AND r.score IS NOT NULL`,
-    [runId, userId],
+    [runId, runOwnerId],
   )
   if (!rows.length) throw new StoreError('run_not_found', 404)
   const member = await isMember(userId)

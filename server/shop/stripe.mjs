@@ -60,6 +60,10 @@ export async function createCheckout(user, productId, returnUrl, requestHost) {
     customer_name: user.name ?? '',
   }
   const subscription = product.kind === 'subscription'
+  // Guests have no login: the restore code goes on the Checkout page and the receipt so they can
+  // recover purchases on another device. It is a bearer secret, so it is never put in metadata.
+  const code = user.guestCode
+  const description = code ? `Magpie Sky Patrol: ${product.name}. Restore code: ${code}` : `Magpie Sky Patrol: ${product.name}`
   const session = await stripe().checkout.sessions.create({
     mode: subscription ? 'subscription' : 'payment',
     // The customer record carries the buyer's account email, so Checkout is prefilled with it.
@@ -76,7 +80,8 @@ export async function createCheckout(user, productId, returnUrl, requestHost) {
         ...(subscription ? { recurring: { interval: product.interval } } : {}),
       },
     }],
-    ...(subscription ? { subscription_data: { metadata } } : { payment_intent_data: { metadata } }),
+    ...(subscription ? { subscription_data: { metadata, description } } : { payment_intent_data: { metadata, description } }),
+    ...(code ? { custom_text: { submit: { message: `Your purchase is saved to restore code ${code}. It will also be on your emailed receipt. Keep it to restore purchases on another device.` } } } : {}),
     // Literal {CHECKOUT_SESSION_ID} is substituted by Stripe; do not URL-encode it.
     success_url: `${base}?checkout=success&session_id={CHECKOUT_SESSION_ID}`,
     cancel_url: `${base}?checkout=cancel`,
